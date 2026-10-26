@@ -1,11 +1,12 @@
-
-
+# Secrets and environment variables
 .env
 
+# Local container SQLite databases
 data/*.db
 data/*.sqlite
 data/*.sqlite3
 
+# Python cache and virtual environments
 __pycache__/
 *.py[cod]
 *$py.class
@@ -13,7 +14,7 @@ __pycache__/
 venv/
 env/
 
+# IDE and OS files
 .idea/
 .vscode/
 .DS_Store
-

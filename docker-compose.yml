@@ -1,0 +1,12 @@
+services:
+  mentor-agent:
+    build: .
+    container_name: ai_project_mentor
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # Mount target project as READ-ONLY (:ro) for maximum security
+      - ${TARGET_PROJECT_PATH}:/workspace/project:ro
+      # Persist local SQLite database on host machine
+      - ./data:/app/data
