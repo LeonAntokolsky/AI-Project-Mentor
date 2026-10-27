@@ -6,16 +6,24 @@ class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path
 
-    async def init_db(self):
-        """Initializes SQLite tables for project state and task backlog."""
+    async def init_db(self, default_interval: int = 24):
+        """Initializes SQLite tables and runs safe schema migrations."""
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("""
+            await db.execute(f"""
                 CREATE TABLE IF NOT EXISTS project_state (
                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                    chat_id INTEGER,
                     summary TEXT,
-                    ignored_count INTEGER DEFAULT 0
+                    ignored_count INTEGER DEFAULT 0,
+                    ping_interval_hours INTEGER DEFAULT {default_interval}
                 )
             """)
+            for col_def in ["chat_id INTEGER", f"ping_interval_hours INTEGER DEFAULT {default_interval}"]:
+                try:
+                    await db.execute(f"ALTER TABLE project_state ADD COLUMN {col_def}")
+                except Exception:
+                    pass
+
             await db.execute("""
                 CREATE TABLE IF NOT EXISTS tasks (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -30,6 +38,40 @@ class Database:
             """)
             await db.commit()
 
+    async def set_chat_id(self, chat_id: int):
+        """Registers or updates the active Telegram chat_id."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT INTO project_state (id, chat_id, ignored_count)
+                VALUES (1, ?, 0)
+                ON CONFLICT(id) DO UPDATE SET chat_id = excluded.chat_id
+            """, (chat_id,))
+            await db.commit()
+
+    async def get_chat_id(self) -> Optional[int]:
+        """Retrieves the registered Telegram chat_id."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT chat_id FROM project_state WHERE id = 1")
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else None
+
+    async def set_ping_interval(self, hours: int):
+        """Updates the reminder interval in hours."""
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT INTO project_state (id, ping_interval_hours)
+                VALUES (1, ?)
+                ON CONFLICT(id) DO UPDATE SET ping_interval_hours = excluded.ping_interval_hours
+            """, (hours,))
+            await db.commit()
+
+    async def get_ping_interval(self, default_hours: int = 24) -> int:
+        """Retrieves the current reminder interval in hours."""
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT ping_interval_hours FROM project_state WHERE id = 1")
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else default_hours
+
     async def save_audit_result(self, audit: ProjectAuditResult):
         """Saves project summary and populates pending tasks."""
         async with aiosqlite.connect(self.db_path) as db:
@@ -39,7 +81,6 @@ class Database:
                 ON CONFLICT(id) DO UPDATE SET summary = excluded.summary, ignored_count = 0
             """, (audit.project_summary,))
 
-            # Clear old pending tasks before inserting fresh audit results
             await db.execute("DELETE FROM tasks WHERE status = 'pending'")
 
             for t in audit.tasks:
@@ -56,6 +97,14 @@ class Database:
             cursor = await db.execute(
                 "SELECT * FROM tasks WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
             )
+            row = await cursor.fetchone()
+            return dict(row) if row else None
+
+    async def get_task_by_id(self, task_id: int) -> Optional[dict]:
+        """Fetches a specific task by its ID for verification."""
+        async with aiosqlite.connect(self.db_path) as db:
+            db.row_factory = aiosqlite.Row
+            cursor = await db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
             row = await cursor.fetchone()
             return dict(row) if row else None
 
@@ -84,15 +133,19 @@ class Database:
     async def get_stats(self) -> dict:
         """Returns current project statistics and task counts."""
         async with aiosqlite.connect(self.db_path) as db:
-            cursor = await db.execute("SELECT summary, ignored_count FROM project_state WHERE id = 1")
+            cursor = await db.execute(
+                "SELECT summary, ignored_count, chat_id, ping_interval_hours FROM project_state WHERE id = 1"
+            )
             state_row = await cursor.fetchone()
 
             cursor = await db.execute("SELECT status, COUNT(*) FROM tasks GROUP BY status")
             counts = dict(await cursor.fetchall())
 
             return {
-                "summary": state_row[0] if state_row else "Not scanned yet",
-                "ignored_count": state_row[1] if state_row else 0,
+                "summary": state_row[0] if state_row and state_row[0] else "Not scanned yet",
+                "ignored_count": state_row[1] if state_row and state_row[1] else 0,
+                "chat_id": state_row[2] if state_row else None,
+                "ping_interval_hours": state_row[3] if state_row and state_row[3] else 24,
                 "pending": counts.get("pending", 0),
                 "completed": counts.get("completed", 0),
                 "skipped": counts.get("skipped", 0),

@@ -11,8 +11,8 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 if not TELEGRAM_BOT_TOKEN:
     raise ValueError("TELEGRAM_BOT_TOKEN environment variable is not set.")
 
-TELEGRAM_CHAT_ID = int(os.getenv("TELEGRAM_CHAT_ID", "0"))
 PING_INTERVAL_HOURS = int(os.getenv("PING_INTERVAL_HOURS", "24"))
+GEMINI_MODEL_NAME = os.getenv("GEMINI_MODEL_NAME", "gemini-3.8-flash")
 
 # Internal container paths
 CONTAINER_PROJECT_PATH = os.getenv("CONTAINER_PROJECT_PATH", "/workspace/project")
