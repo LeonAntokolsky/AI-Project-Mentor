@@ -61,7 +61,10 @@ def collect_project_context(project_dir: str, max_chars: int = 300_000) -> str:
             try:
                 content = file_path.read_text(encoding="utf-8", errors="ignore")
                 content = scrub_secrets(content)
-                snippet = f"\n=== FILE: {rel_path} ===\n{content}\n"
+                numbered_lines = "\n".join(
+                    f"{i + 1}: {line}" for i, line in enumerate(content.splitlines())
+                )
+                snippet = f"\n=== FILE: {rel_path} ===\n{numbered_lines}\n"
 
                 if total_chars + len(snippet) > max_chars:
                     collected_parts.append("\n[...Context limit reached, remaining files truncated...]")

@@ -73,14 +73,6 @@ async def block_unverified_msg(message: Message):
 async def block_unverified_cb(callback: CallbackQuery):
     await callback.answer("🔒 Please authenticate via /auth first!", show_alert=True)
 
-@dp.message(lambda msg: True)
-
-@dp.message(lambda msg: not ALLOWED_USER_ID or msg.from_user.id != ALLOWED_USER_ID)
-async def block_unverified_or_strangers(message: Message):
-    if ALLOWED_USER_ID and message.from_user.id != ALLOWED_USER_ID:
-        await message.answer("⛔️ Access denied.")
-        return
-
 @dp.callback_query(lambda cb: not is_authorized(cb.from_user.id))
 async def unauthorized_callback_handler(callback: CallbackQuery):
     await callback.answer("⛔️ Unauthorized access.", show_alert=True)

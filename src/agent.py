@@ -55,7 +55,9 @@ class MentorAgent:
             "2. Identify real security vulnerabilities (vulnerability), unfinished code/TODOs/stubs (unfinished_todo), "
             "and high-impact improvements (improvement).\n"
             "3. Break findings down into bite-sized micro-tasks taking 10-20 minutes each.\n"
-            "4. Provide a concrete, copy-pasteable code snippet (ready_code_fix) under 35 lines for every task.\n\n"
+            "4. Provide a concrete, copy-pasteable code snippet (ready_code_fix) under 35 lines. "
+            "Use the line numbers in the source dump to reference the exact lines in your comments, "
+            "but DO NOT include line number prefixes inside the code snippet itself.\n\n"
             f"PROJECT SOURCE CODE:\n{codebase_dump}"
         )
 
