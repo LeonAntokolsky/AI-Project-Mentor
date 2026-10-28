@@ -18,29 +18,24 @@ ALLOWED_EXTENSIONS = {
 }
 
 SECRET_PATTERNS = [
-    re.compile(r'(?i)(api[_-]?key|secret|token|password)\s*[:=]\s*["\'][a-zA-Z0-9_\-]{12,}["\']')
+    re.compile(r'(?i)(api[_-]?key|secret|token|password|auth)\s*[:=]\s*["\']?[a-zA-Z0-9_\-\.:/+=]{12,}["\']?'),
+    re.compile(r'\b\d{8,10}:[a-zA-Z0-9_-]{35}\b'),
 ]
 
 def scrub_secrets(text: str) -> str:
-    """Masks potential hardcoded API keys or passwords in the source code."""
     for pattern in SECRET_PATTERNS:
-        text = pattern.sub(r'\1 = "<REDACTED_BY_SCANNER>"', text)
+        text = pattern.sub('<REDACTED_SECRET>', text)
     return text
 
 def read_single_file(project_dir: str, rel_file_path: str) -> str:
-    """Reads a specific file from the target project for task verification."""
     base_path = Path(project_dir).resolve()
-    target_path = (base_path / rel_file_path).resolve()
-
-    # Security check: prevent path traversal outside project directory
-    if not str(target_path).startswith(str(base_path)):
+    clean_rel = rel_file_path.lstrip("/\\")
+    target_path = (base_path / clean_rel).resolve()
+    if not target_path.is_relative_to(base_path):
         raise ValueError("Invalid file path: outside of project directory.")
-
-    if not target_path.exists() or not target_path.is_file():
+    if not target_path.is_file():
         raise FileNotFoundError(f"File '{rel_file_path}' not found in project.")
-
-    content = target_path.read_text(encoding="utf-8", errors="ignore")
-    return scrub_secrets(content)
+    return scrub_secrets(target_path.read_text(encoding="utf-8", errors="ignore"))
 
 def collect_project_context(project_dir: str, max_chars: int = 300_000) -> str:
     """Traverses the project directory and packs allowed source files into a single string."""

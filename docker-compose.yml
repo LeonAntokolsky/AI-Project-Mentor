@@ -6,9 +6,9 @@ services:
     env_file:
       - .env
     volumes:
-      # Mount target project as read-only (:ro)
-      - ${TARGET_PROJECT_PATH}:/workspace/project:ro
+      - ${TARGET_PROJECT_PATH}:/workspace/project
       # Mount local src directory for instant code updates
       - ./src:/app/src
       # Persist SQLite database on host machine
       - ./data:/app/data
+      - ~/.ssh:/root/.ssh:ro

@@ -1,13 +1,16 @@
 import asyncio
 import html
+import secrets
+import os
 import logging
+import subprocess
 from datetime import datetime, timedelta
 from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup,
-    InlineKeyboardButton, BufferedInputFile
+    InlineKeyboardButton, BufferedInputFile, BotCommand
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from google.genai.errors import APIError
@@ -27,6 +30,72 @@ scheduler = AsyncIOScheduler()
 
 MAIN_JOB_ID = "scheduled_ping_job"
 MAX_TG_LENGTH = 4000
+ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
+AUTH_TOKEN_FILE = Path("/app/data/.auth_token")
+
+def is_authorized(user_id: int) -> bool:
+    """Checks if the user is allowed to interact with the bot."""
+    return not ALLOWED_USER_ID or user_id == ALLOWED_USER_ID
+
+def get_or_create_fs_token() -> str:
+    if not AUTH_TOKEN_FILE.exists():
+        AUTH_TOKEN_FILE.write_text(secrets.token_hex(8), encoding="utf-8")
+    return AUTH_TOKEN_FILE.read_text(encoding="utf-8").strip()
+
+@dp.message(Command("auth"))
+async def cmd_auth(message: Message):
+    if ALLOWED_USER_ID and message.from_user.id != ALLOWED_USER_ID:
+        return
+    parts = message.text.split(maxsplit=1)
+    token = parts[1].strip() if len(parts) > 1 else ""
+    if token and secrets.compare_digest(token, get_or_create_fs_token()):
+        await db.set_user_verified(message.chat.id)
+        await message.answer("🔐 <b> Access confirmed!  You have proven to have access to the server’s file system.", parse_mode="HTML")
+    else:
+        await message.answer("❌ Invalid token. Verify the data/. auth_token file on the server.", parse_mode="HTML")
+
+async def unverified_filter(event: Message | CallbackQuery) -> bool:
+    if ALLOWED_USER_ID and event.from_user.id != ALLOWED_USER_ID:
+        return True
+    return not (await db.is_user_verified())
+
+@dp.message(unverified_filter)
+async def block_unverified_msg(message: Message):
+    get_or_create_fs_token()  # Ensure the auth token file is created on disk
+    await message.answer(
+        "🔒 <b>Bot is locked.</b>\n"
+        "Prove server filesystem access: run <code>cat data/.auth_token</code> "
+        "and send <code>/auth YOUR_TOKEN</code>",
+        parse_mode="HTML"
+    )
+
+@dp.callback_query(unverified_filter)
+async def block_unverified_cb(callback: CallbackQuery):
+    await callback.answer("🔒 Please authenticate via /auth first!", show_alert=True)
+
+@dp.message(lambda msg: True)
+
+@dp.message(lambda msg: not ALLOWED_USER_ID or msg.from_user.id != ALLOWED_USER_ID)
+async def block_unverified_or_strangers(message: Message):
+    if ALLOWED_USER_ID and message.from_user.id != ALLOWED_USER_ID:
+        await message.answer("⛔️ Access denied.")
+        return
+
+@dp.callback_query(lambda cb: not is_authorized(cb.from_user.id))
+async def unauthorized_callback_handler(callback: CallbackQuery):
+    await callback.answer("⛔️ Unauthorized access.", show_alert=True)
+
+async def setup_bot_commands(bot_instance: Bot):
+    """Registers the persistent Command Menu in Telegram UI."""
+    commands = [
+        BotCommand(command="next", description="🎯 Get the next micro-task right now"),
+        BotCommand(command="status", description="📊 View progress and momentum stats"),
+        BotCommand(command="scan", description="🔍 Scan project and generate tasks"),
+        BotCommand(command="settings", description="⚙️ Change reminder interval (1h-48h)"),
+        BotCommand(command="motivate", description="💡 Co-Founder check-in & MVP rescue plan"),
+        BotCommand(command="start", description="👋 Show welcome guide & help"),
+    ]
+    await bot_instance.set_my_commands(commands)
 
 def get_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
     """Builds inline buttons for verifying, snoozing, or skipping a task."""
@@ -37,6 +106,22 @@ def get_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
         ],
         [
             InlineKeyboardButton(text="⏳ Snooze (Remind Tomorrow)", callback_data=f"snooze:{task_id}")
+        ]
+    ])
+
+def get_quick_actions_keyboard() -> InlineKeyboardMarkup:
+    """Builds a rescue keyboard so the user never gets stuck."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next"),
+            InlineKeyboardButton(text="📊 Status", callback_data="quick:status"),
+        ],
+        [
+            InlineKeyboardButton(text="🔍 Rescan Project", callback_data="quick:scan"),
+            InlineKeyboardButton(text="⚙️ Settings", callback_data="quick:settings"),
+        ],
+        [
+            InlineKeyboardButton(text="📦 Commit & Push Changes", callback_data="git:commit_push")
         ]
     ])
 
@@ -62,7 +147,8 @@ async def run_codebase_scan(chat_id: int):
             chat_id,
             f"✅ <b>Analysis Complete!</b>\n\n<b>Project Summary:</b>\n{summary_escaped}\n\n"
             f"Generated <b>{len(audit_result.tasks)}</b> micro-tasks. Use /next to get your first task immediately!",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=get_quick_actions_keyboard()
         )
     except FileNotFoundError:
         logging.error(f"Project directory not found at {config.CONTAINER_PROJECT_PATH}")
@@ -93,7 +179,8 @@ async def send_task_to_user(chat_id: int):
         await bot.send_message(
             chat_id,
             "🎉 You've completed all tasks in the current backlog!\n"
-            "Run /scan to generate new tasks or /motivate for a co-founder check-in."
+            "Run /scan to generate new tasks or /motivate for a co-founder check-in.",
+            reply_markup=get_quick_actions_keyboard()
         )
         return
 
@@ -108,7 +195,6 @@ async def send_task_to_user(chat_id: int):
     code_fix_escaped = html.escape(task["ready_code_fix"])
     full_text = f"{header}<b>Suggested Fix:</b>\n<pre><code>{code_fix_escaped}</code></pre>"
 
-    # If the message fits inside Telegram's 4096-char limit, send it normally
     if len(full_text) <= MAX_TG_LENGTH:
         await bot.send_message(
             chat_id,
@@ -117,7 +203,6 @@ async def send_task_to_user(chat_id: int):
             reply_markup=get_task_keyboard(task["id"])
         )
     else:
-        # Otherwise, send the full untruncated code as a downloadable file attachment
         ext = Path(task["file_path"]).suffix or ".txt"
         filename = f"suggested_fix_task_{task['id']}{ext}"
         file_bytes = task["ready_code_fix"].encode("utf-8")
@@ -148,13 +233,14 @@ async def send_scheduled_ping():
         await bot.send_message(
             chat_id,
             f"💡 <b>Co-Founder Check-In</b>\n\n{safe_msg}",
-            parse_mode="HTML"
+            parse_mode="HTML",
+            reply_markup=get_quick_actions_keyboard()
         )
         return
 
     await send_task_to_user(chat_id)
 
-@dp.message(Command("start"))
+@dp.message(Command("start", "help"))
 async def cmd_start(message: Message):
     await db.set_chat_id(message.chat.id)
     interval = await db.get_ping_interval(config.PING_INTERVAL_HOURS)
@@ -163,12 +249,13 @@ async def cmd_start(message: Message):
         f"✅ Registered Chat ID: <code>{message.chat.id}</code>\n"
         f"⏰ Current Reminder Interval: <b>every {interval}h</b>\n\n"
         f"<b>Available Commands:</b>\n"
-        f"/scan — Analyze mounted project and generate tasks\n"
         f"/next — Get the next micro-task right now\n"
-        f"/settings — Change reminder interval on the fly\n"
+        f"/scan — Analyze mounted project and generate tasks\n"
         f"/status — View project progress and momentum stats\n"
+        f"/settings — Change reminder interval on the fly\n"
         f"/motivate — Test the Co-Founder motivation & pivot mode",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=get_quick_actions_keyboard()
     )
 
 @dp.message(Command("settings"))
@@ -225,7 +312,8 @@ async def cmd_status(message: Message):
         f"⏭ <b>Skipped:</b> {stats['skipped']}\n"
         f"💤 <b>Missed pings in a row:</b> {stats['ignored_count']}\n"
         f"⏰ <b>Ping interval:</b> every {stats['ping_interval_hours']}h",
-        parse_mode="HTML"
+        parse_mode="HTML",
+        reply_markup=get_quick_actions_keyboard()
     )
 
 @dp.message(Command("motivate"))
@@ -233,14 +321,56 @@ async def cmd_motivate(message: Message):
     await db.set_chat_id(message.chat.id)
     stats = await db.get_stats()
     if stats["summary"] == "Not scanned yet":
-        await message.answer("Please run /scan first so I can understand your project!")
+        await message.answer(
+            "Please run /scan first so I can understand your project!",
+            reply_markup=get_quick_actions_keyboard()
+        )
         return
     await message.answer("🧠 Thinking of new product ideas and an MVP rescue plan...")
     pivot_msg = await asyncio.to_thread(
         agent.generate_motivation_pivot, stats["summary"], max(stats["ignored_count"], 3)
     )
     safe_msg = html.escape(pivot_msg)[:MAX_TG_LENGTH]
-    await message.answer(f"💡 <b>Co-Founder Check-In</b>\n\n{safe_msg}", parse_mode="HTML")
+    await message.answer(
+        f"💡 <b>Co-Founder Check-In</b>\n\n{safe_msg}",
+        parse_mode="HTML",
+        reply_markup=get_quick_actions_keyboard()
+    )
+
+@dp.callback_query(F.data.startswith("quick:"))
+async def handle_quick_actions(callback: CallbackQuery):
+    """Handles quick action buttons so the user can navigate without typing commands."""
+    action = callback.data.split(":")[1]
+    chat_id = callback.message.chat.id
+    await db.set_chat_id(chat_id)
+    await callback.answer()
+
+    if action == "next":
+        await db.reset_ignored_count()
+        await send_task_to_user(chat_id)
+    elif action == "status":
+        stats = await db.get_stats()
+        await callback.message.answer(
+            f"📊 <b>Project Momentum Status</b>\n\n"
+            f"✅ <b>Completed & Verified:</b> {stats['completed']}\n"
+            f"⏳ <b>Pending in backlog:</b> {stats['pending']}\n"
+            f"⏭ <b>Skipped:</b> {stats['skipped']}\n"
+            f"💤 <b>Missed pings in a row:</b> {stats['ignored_count']}\n"
+            f"⏰ <b>Ping interval:</b> every {stats['ping_interval_hours']}h",
+            parse_mode="HTML",
+            reply_markup=get_quick_actions_keyboard()
+        )
+    elif action == "scan":
+        await run_codebase_scan(chat_id)
+    elif action == "settings":
+        current_hours = await db.get_ping_interval(config.PING_INTERVAL_HOURS)
+        await callback.message.answer(
+            f"⚙️ <b>Reminder Schedule Settings</b>\n\n"
+            f"Current interval: <b>every {current_hours} hours</b>.\n"
+            f"Select a new interval below:",
+            parse_mode="HTML",
+            reply_markup=get_settings_keyboard(current_hours)
+        )
 
 @dp.callback_query(F.data.startswith(("verify:", "done:")))
 async def handle_verify_callback(callback: CallbackQuery):
@@ -292,6 +422,7 @@ async def handle_skip_callback(callback: CallbackQuery):
 
 @dp.callback_query(F.data.startswith("snooze:"))
 async def handle_snooze_callback(callback: CallbackQuery):
+    # Keep the buttons intact so the user can still verify or skip whenever they return!
     await db.reset_ignored_count()
     interval = await db.get_ping_interval(config.PING_INTERVAL_HOURS)
     next_run = datetime.now() + timedelta(hours=24)
@@ -303,17 +434,79 @@ async def handle_snooze_callback(callback: CallbackQuery):
         id=MAIN_JOB_ID,
         replace_existing=True
     )
-
     await callback.answer("⏳ Snoozed for 24 hours!")
     await callback.message.reply(
-        "⏳ <b>Snoozed!</b> Momentum counter reset. I will remind you about this task tomorrow. "
-        "Whenever you're ready earlier, just use /next!",
-        parse_mode="HTML"
+        "⏳ <b>Snoozed for 24 hours!</b>\n"
+        "You can still click <b>✅ Verify & Done</b> above whenever you finish, or use the quick actions below:",
+        parse_mode="HTML",
+        reply_markup=get_quick_actions_keyboard()
+    )
+
+@dp.callback_query(F.data == "git:commit_push")
+async def handle_git_commit_push(callback: CallbackQuery):
+    await callback.answer("📦 Checking modified files in Git...")
+    proj_dir = config.CONTAINER_PROJECT_PATH
+
+    try:
+        # Allow git to operate inside the mounted directory
+        subprocess.run(["git", "config", "--global", "--add", "safe.directory", proj_dir], check=False)
+
+        # Get diff only for modified tracked files
+        diff_proc = subprocess.run(["git", "diff", "HEAD"], cwd=proj_dir, capture_output=True, text=True)
+        diff_text = diff_proc.stdout.strip()
+
+        if not diff_text:
+            await callback.message.answer("ℹ️ No modified tracked files to commit (`git diff` is empty).")
+            return
+
+        status_msg = await callback.message.answer("🧠 Generating commit message from changes and updating Git...")
+
+        # 1. Generate commit description via Gemini
+        commit_msg = await asyncio.to_thread(agent.generate_commit_message, diff_text)
+
+        # 2. Stage ONLY modified files (git add -u ignores untruncated junk and untracked files)
+        subprocess.run(["git", "add", "-u"], cwd=proj_dir, check=True)
+
+        # 3. Set default author credentials (if not configured in container) and commit
+        subprocess.run(["git", "config", "user.name", "AI Project Mentor"], cwd=proj_dir, check=False)
+        subprocess.run(["git", "config", "user.email", "mentor@local"], cwd=proj_dir, check=False)
+        subprocess.run(["git", "commit", "-m", commit_msg], cwd=proj_dir, check=True)
+
+        # 4. Attempt git push
+        push_proc = subprocess.run(["git", "push"], cwd=proj_dir, capture_output=True, text=True)
+        if push_proc.returncode == 0:
+            await status_msg.edit_text(
+                f"✅ <b>Git successfully updated and pushed!</b>\n"
+                f"📝 <b>Commit:</b> <code>{html.escape(commit_msg)}</code>",
+                parse_mode="HTML"
+            )
+        else:
+            await status_msg.edit_text(
+                f"✅ <b>Local commit created successfully!</b>\n"
+                f"📝 <code>{html.escape(commit_msg)}</code>\n\n"
+                f"⚠️ <i>Push requires host authentication:</i>\n<code>{html.escape(push_proc.stderr[:300])}</code>",
+                parse_mode="HTML"
+            )
+    except Exception as e:
+        await callback.message.answer(f"❌ <b>Git Error:</b> {html.escape(str(e))}", parse_mode="HTML")
+
+
+# Fallback handler AT THE VERY BOTTOM so the user NEVER gets silence
+@dp.message()
+async def fallback_message_handler(message: Message):
+    await db.set_chat_id(message.chat.id)
+    await message.answer(
+        "🤔 I didn't quite catch that command.\n\n"
+        "Use the <b>Menu</b> button on the left of your message bar or pick an action below:",
+        parse_mode="HTML",
+        reply_markup=get_quick_actions_keyboard()
     )
 
 async def main():
     await db.init_db(default_interval=config.PING_INTERVAL_HOURS)
     interval = await db.get_ping_interval(config.PING_INTERVAL_HOURS)
+
+    await setup_bot_commands(bot)
 
     scheduler.add_job(
         send_scheduled_ping,

@@ -1,5 +1,6 @@
 # Secrets and environment variables
 .env
+data/.auth_token
 
 # Local container SQLite databases
 data/*.db

@@ -1,9 +1,13 @@
+from __future__ import annotations
+
 import config
 from pathlib import Path
 from typing import Literal
 from pydantic import BaseModel, Field
 from google import genai
 from google.genai import types
+
+DEFAULT_SKILL_PATH = Path(__file__).resolve().parent / "skills" / "SKILL.md"
 
 class BacklogTask(BaseModel):
     category: Literal["vulnerability", "unfinished_todo", "improvement"] = Field(
@@ -26,10 +30,11 @@ class TaskVerificationResult(BaseModel):
     feedback: str = Field(description="Short, constructive feedback explaining what is good or what is still missing (2-3 sentences)")
 
 class MentorAgent:
-    def __init__(self, api_key: str, skill_path: str = "/app/src/skills/SKILL.md"):
+    def __init__(self, api_key: str, skill_path: str | Path | None = None):
         self.client = genai.Client(api_key=api_key)
         self.model_name = config.GEMINI_MODEL_NAME
-        self.skill_instructions = self._load_skill(skill_path)
+        resolved_path = Path(skill_path) if skill_path else DEFAULT_SKILL_PATH
+        self.skill_instructions = self._load_skill(str(resolved_path))
 
     def _load_skill(self, skill_path: str) -> str:
         """Loads agent engineering principles (SKILL.md) to inject as system instructions."""
@@ -114,3 +119,17 @@ class MentorAgent:
             ),
         )
         return response.text
+
+    def generate_commit_message(self, diff_text: str) -> str:
+        """Generates a concise git commit message based on git diff."""
+        prompt = (
+            "Generate a concise, single-line Conventional Commit message (e.g., 'feat: ...', 'fix: ...', 'refactor: ...') "
+            "summarizing ONLY the actual changes shown in this git diff. Return plain text without quotes or markdown:\n\n"
+            f"{diff_text[:15000]}"
+        )
+        response = self.client.models.generate_content(
+            model=self.model_name,
+            contents=prompt,
+            config=types.GenerateContentConfig(temperature=0.2),
+        )
+        return response.text.strip().splitlines()[0]

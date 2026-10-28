@@ -18,7 +18,7 @@ class Database:
                     ping_interval_hours INTEGER DEFAULT {default_interval}
                 )
             """)
-            for col_def in ["chat_id INTEGER", f"ping_interval_hours INTEGER DEFAULT {default_interval}"]:
+            for col_def in ["chat_id INTEGER", f"ping_interval_hours INTEGER DEFAULT {default_interval}", "is_verified INTEGER DEFAULT 0"]:
                 try:
                     await db.execute(f"ALTER TABLE project_state ADD COLUMN {col_def}")
                 except Exception:
@@ -73,21 +73,18 @@ class Database:
             return row[0] if row and row[0] else default_hours
 
     async def save_audit_result(self, audit: ProjectAuditResult):
-        """Saves project summary and populates pending tasks."""
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute("""
-                INSERT INTO project_state (id, summary, ignored_count)
-                VALUES (1, ?, 0)
-                ON CONFLICT(id) DO UPDATE SET summary = excluded.summary, ignored_count = 0
-            """, (audit.project_summary,))
-
+            await db.execute(
+                "INSERT INTO project_state (id, summary, ignored_count) VALUES (1, ?, 0) ON CONFLICT(id) DO UPDATE SET summary = excluded.summary, ignored_count = 0",
+                (audit.project_summary,))
             await db.execute("DELETE FROM tasks WHERE status = 'pending'")
-
-            for t in audit.tasks:
-                await db.execute("""
-                    INSERT INTO tasks (category, file_path, title, explanation, ready_code_fix, estimated_minutes)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                """, (t.category, t.file_path, t.title, t.explanation, t.ready_code_fix, t.estimated_minutes))
+            task_rows = [
+                (t.category, t.file_path, t.title, t.explanation, t.ready_code_fix, t.estimated_minutes)
+                for t in audit.tasks
+            ]
+            await db.executemany(
+                "INSERT INTO tasks (category, file_path, title, explanation, ready_code_fix, estimated_minutes) VALUES (?, ?, ?, ?, ?, ?)",
+                task_rows)
             await db.commit()
 
     async def get_next_task(self) -> Optional[dict]:
@@ -150,3 +147,17 @@ class Database:
                 "completed": counts.get("completed", 0),
                 "skipped": counts.get("skipped", 0),
             }
+
+    async def is_user_verified(self) -> bool:
+        async with aiosqlite.connect(self.db_path) as db:
+            cursor = await db.execute("SELECT is_verified FROM project_state WHERE id = 1")
+            row = await cursor.fetchone()
+            return bool(row and row[0])
+
+    async def set_user_verified(self, chat_id: int):
+        async with aiosqlite.connect(self.db_path) as db:
+            await db.execute("""
+                INSERT INTO project_state (id, chat_id, is_verified) VALUES (1, ?, 1)
+                ON CONFLICT(id) DO UPDATE SET chat_id = excluded.chat_id, is_verified = 1
+            """, (chat_id,))
+            await db.commit()
