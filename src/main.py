@@ -64,8 +64,45 @@ def get_or_create_fs_token() -> str:
         AUTH_TOKEN_FILE.write_text(secrets.token_hex(8), encoding="utf-8")
     return AUTH_TOKEN_FILE.read_text(encoding="utf-8").strip()
 
+def extract_emojis(reactions_list: list) -> set[str]:
+    """Extracts normalized emoji strings from Telegram ReactionType objects."""
+    return {
+        r.emoji.replace("\ufe0f", "")
+        for r in reactions_list
+        if isinstance(r, ReactionTypeEmoji)
+    }
+
 def get_cute_heart_reply() -> str:
     return random.choice(CUTE_HEART_REPLIES)
+
+def format_status_message(stats: dict) -> str:
+    return (
+        f"📊 <b>Project Momentum Status</b>\n\n"
+        f"✅ <b>Completed & Verified:</b> {stats['completed']}\n"
+        f"⏳ <b>Pending in backlog:</b> {stats['pending']}\n"
+        f"⏭️ <b>Skipped:</b> {stats['skipped']}\n"
+        f"💤 <b>Missed pings in a row:</b> {stats['ignored_count']}\n"
+        f"⏰ <b>Ping interval:</b> every {stats['ping_interval_hours']}h"
+    )
+
+async def send_status_view(target: Message | CallbackQuery):
+    stats = await db.get_stats()
+    text = format_status_message(stats)
+    send = target.answer if isinstance(target, Message) else target.message.answer
+    await send(text, parse_mode="HTML", reply_markup=get_quick_actions_keyboard())
+
+async def send_settings_menu(target: Message | CallbackQuery):
+    """Sends the schedule settings menu for both command and quick action button callbacks."""
+    chat_id = target.chat.id if isinstance(target, Message) else target.message.chat.id
+    await db.set_chat_id(chat_id)
+    hours = await db.get_ping_interval(config.PING_INTERVAL_HOURS)
+    text = (
+        f"⚙️ <b>Reminder Schedule Settings</b>\n\n"
+        f"Current interval: <b>every {hours} hours</b>.\n"
+        f"Select a new interval below:"
+    )
+    send = target.answer if isinstance(target, Message) else target.message.answer
+    await send(text, parse_mode="HTML", reply_markup=get_settings_keyboard(hours))
 
 @dp.message(Command("auth"))
 async def cmd_auth(message: Message):
@@ -304,31 +341,21 @@ async def cmd_start(message: Message):
 
 @dp.message_reaction()
 async def handle_heart_reaction(event: MessageReactionUpdated):
-    # 1. Ignore reactions made by bots (including this bot itself) to prevent feedback loops
+    # 1. Ignore reactions made by bots to prevent feedback loops
     if not event.user or event.user.is_bot or not is_authorized(event.user.id):
         return
 
-    # Helper function to extract normalized emoji strings
-    def get_emoji_set(reactions_list):
-        result = set()
-        for r in reactions_list:
-            if isinstance(r, ReactionTypeEmoji):
-                # Remove unicode variation selector \ufe0f if present
-                clean_emoji = r.emoji.replace("\ufe0f", "")
-                result.add(clean_emoji)
-        return result
+    old_emojis = extract_emojis(event.old_reaction)
+    new_emojis = extract_emojis(event.new_reaction)
 
-    old_emojis = get_emoji_set(event.old_reaction)
-    new_emojis = get_emoji_set(event.new_reaction)
-
-    # 2. Check if a new heart reaction was added (present in new, but not in old)
+    # 2. Check if a new heart reaction was added
     added_emojis = new_emojis - old_emojis
     has_new_heart = any(emoji in ALLOWED_HEART_EMOJIS for emoji in added_emojis)
 
     if not has_new_heart:
         return
 
-    # 3. Set reciprocal reaction on the message from the bot
+    # 3. Set reciprocal reaction on the message
     try:
         await bot.set_message_reaction(
             chat_id=event.chat.id,
@@ -338,7 +365,7 @@ async def handle_heart_reaction(event: MessageReactionUpdated):
     except Exception as e:
         logging.debug(f"Failed to set reciprocal reaction: {e}")
 
-    # 4. Pick a truly random reply from the list and send it
+    # 4. Pick a random reply and send it
     reply_text = random.choice(CUTE_HEART_REPLIES)
     try:
         await bot.send_message(
@@ -355,15 +382,7 @@ async def handle_heart_reaction(event: MessageReactionUpdated):
 
 @dp.message(Command("settings"))
 async def cmd_settings(message: Message):
-    await db.set_chat_id(message.chat.id)
-    current_hours = await db.get_ping_interval(config.PING_INTERVAL_HOURS)
-    await message.answer(
-        f"⚙️ <b>Reminder Schedule Settings</b>\n\n"
-        f"Current interval: <b>every {current_hours} hours</b>.\n"
-        f"Select a new interval below (applies immediately without restarting):",
-        parse_mode="HTML",
-        reply_markup=get_settings_keyboard(current_hours)
-    )
+    await send_settings_menu(message)
 
 @dp.callback_query(F.data.startswith("set_interval:"))
 async def handle_set_interval(callback: CallbackQuery):
@@ -401,12 +420,7 @@ async def cmd_status(message: Message):
     await db.set_chat_id(message.chat.id)
     stats = await db.get_stats()
     await message.answer(
-        f"📊 <b>Project Momentum Status</b>\n\n"
-        f"✅ <b>Completed & Verified:</b> {stats['completed']}\n"
-        f"⏳ <b>Pending in backlog:</b> {stats['pending']}\n"
-        f"⏭ <b>Skipped:</b> {stats['skipped']}\n"
-        f"💤 <b>Missed pings in a row:</b> {stats['ignored_count']}\n"
-        f"⏰ <b>Ping interval:</b> every {stats['ping_interval_hours']}h",
+        format_status_message(stats),
         parse_mode="HTML",
         reply_markup=get_quick_actions_keyboard()
     )
@@ -446,27 +460,14 @@ async def handle_quick_actions(callback: CallbackQuery):
     elif action == "status":
         stats = await db.get_stats()
         await callback.message.answer(
-            f"📊 <b>Project Momentum Status</b>\n\n"
-            f"✅ <b>Completed & Verified:</b> {stats['completed']}\n"
-            f"⏳ <b>Pending in backlog:</b> {stats['pending']}\n"
-            f"⏭ <b>Skipped:</b> {stats['skipped']}\n"
-            f"💤 <b>Missed pings in a row:</b> {stats['ignored_count']}\n"
-            f"⏰ <b>Ping interval:</b> every {stats['ping_interval_hours']}h",
+            format_status_message(stats),
             parse_mode="HTML",
             reply_markup=get_quick_actions_keyboard()
         )
     elif action == "scan":
         await run_codebase_scan(chat_id)
     elif action == "settings":
-        current_hours = await db.get_ping_interval(config.PING_INTERVAL_HOURS)
-        await callback.message.answer(
-            f"⚙️ <b>Reminder Schedule Settings</b>\n\n"
-            f"Current interval: <b>every {current_hours} hours</b>.\n"
-            f"Select a new interval below:",
-            parse_mode="HTML",
-            reply_markup=get_settings_keyboard(current_hours)
-        )
-
+        await send_settings_menu(callback)
 @dp.callback_query(F.data.startswith(("verify:", "done:")))
 async def handle_verify_callback(callback: CallbackQuery):
     task_id = int(callback.data.split(":")[1])

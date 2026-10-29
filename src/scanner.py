@@ -27,6 +27,12 @@ def scrub_secrets(text: str) -> str:
         text = pattern.sub('<REDACTED_SECRET>', text)
     return text
 
+def is_scannable_file(file_name: str, ext: str) -> bool:
+    if file_name in IGNORE_FILES or file_name.startswith(".env"):
+        return False
+    return ext in ALLOWED_EXTENSIONS or file_name.lower() == "dockerfile"
+
+
 def read_single_file(project_dir: str, rel_file_path: str) -> str:
     base_path = Path(project_dir).resolve()
     clean_rel = rel_file_path.lstrip("/\\")
@@ -50,11 +56,8 @@ def collect_project_context(project_dir: str, max_chars: int = 300_000) -> str:
         dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith(".")]
 
         for file in files:
-            if file in IGNORE_FILES or file.startswith(".env"):
-                continue
-
             file_path = Path(root) / file
-            if file_path.suffix.lower() not in ALLOWED_EXTENSIONS and file.lower() != "dockerfile":
+            if not is_scannable_file(file, file_path.suffix.lower()):
                 continue
 
             rel_path = file_path.relative_to(base_path)
