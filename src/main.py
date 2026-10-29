@@ -2,15 +2,18 @@ import asyncio
 import html
 import secrets
 import os
+import random
 import logging
 import subprocess
+from typing import Dict
 from datetime import datetime, timedelta
 from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup,
-    InlineKeyboardButton, BufferedInputFile, BotCommand
+    InlineKeyboardButton, BufferedInputFile, BotCommand,
+    MessageReactionUpdated, ReactionTypeEmoji
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from google.genai.errors import APIError
@@ -28,10 +31,29 @@ db = Database(config.DB_PATH)
 agent = MentorAgent(api_key=config.GEMINI_API_KEY)
 scheduler = AsyncIOScheduler()
 
+# Temporary in-memory store for custom text focus confirmation
+pending_custom_focus: Dict[int, str] = {}
+
+
+CUTE_HEART_REPLIES = [
+    "🥺💖 Oh, thank you so much! I’m trying so hard to be useful!",
+    "🥰✨ Your heart broke my silicon schemes! They pushed the code further!" ,
+    "❤️ Thank you for your love! We will make sure to release this project!" ,
+    "😻 Moore-moore, I can see a heartbeat! You’re an incredible developer!" ,
+    "🌸💞 Thank you so much! My virtual motivation has peaked!"
+]
+ALLOWED_HEART_EMOJIS = {"❤️", "💖", "🥰", "💕", "❤"}
+
 MAIN_JOB_ID = "scheduled_ping_job"
 MAX_TG_LENGTH = 4000
 ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
 AUTH_TOKEN_FILE = Path("/app/data/.auth_token")
+FOCUS_PRESETS = {
+    "security": "Security hardening, input validation, auth protection, and secret safety",
+    "perf": "Performance optimization, async efficiency, I/O reduction, and faster DB queries",
+    "clean": "Strict UB-Mode refactoring: remove duplication, simplify state, and improve readability",
+    "ux": "User experience, better error messages, interactive Telegram UI, and edge-case handling",
+}
 
 def is_authorized(user_id: int) -> bool:
     """Checks if the user is allowed to interact with the bot."""
@@ -41,6 +63,9 @@ def get_or_create_fs_token() -> str:
     if not AUTH_TOKEN_FILE.exists():
         AUTH_TOKEN_FILE.write_text(secrets.token_hex(8), encoding="utf-8")
     return AUTH_TOKEN_FILE.read_text(encoding="utf-8").strip()
+
+def get_cute_heart_reply() -> str:
+    return random.choice(CUTE_HEART_REPLIES)
 
 @dp.message(Command("auth"))
 async def cmd_auth(message: Message):
@@ -80,6 +105,7 @@ async def unauthorized_callback_handler(callback: CallbackQuery):
 async def setup_bot_commands(bot_instance: Bot):
     """Registers the persistent Command Menu in Telegram UI."""
     commands = [
+        BotCommand(command="focus", description="🧭 Scan codebase with a custom focus/goal"),
         BotCommand(command="next", description="🎯 Get the next micro-task right now"),
         BotCommand(command="status", description="📊 View progress and momentum stats"),
         BotCommand(command="scan", description="🔍 Scan project and generate tasks"),
@@ -117,6 +143,19 @@ def get_quick_actions_keyboard() -> InlineKeyboardMarkup:
         ]
     ])
 
+def get_focus_presets_keyboard() -> InlineKeyboardMarkup:
+    """Builds 1-click focus preset buttons."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🔒 Security & Auth", callback_data="focus_preset:security"),
+            InlineKeyboardButton(text="⚡ Performance", callback_data="focus_preset:perf"),
+        ],
+        [
+            InlineKeyboardButton(text="🧹 Clean Code (UB-Mode)", callback_data="focus_preset:clean"),
+            InlineKeyboardButton(text="✨ UX & Reliability", callback_data="focus_preset:ux"),
+        ]
+    ])
+
 def get_settings_keyboard(current_hours: int) -> InlineKeyboardMarkup:
     """Builds inline keyboard to change reminder interval on the fly."""
     options = [1, 6, 12, 24, 48]
@@ -126,19 +165,26 @@ def get_settings_keyboard(current_hours: int) -> InlineKeyboardMarkup:
         buttons.append(InlineKeyboardButton(text=label, callback_data=f"set_interval:{h}"))
     return InlineKeyboardMarkup(inline_keyboard=[buttons])
 
-async def run_codebase_scan(chat_id: int):
-    """Scans the mounted directory, calls Gemini API, and saves backlog tasks."""
+async def run_codebase_scan(chat_id: int, focus_direction: str = ""):
+    """Scans the mounted directory with an optional focus direction and saves tasks."""
     await db.set_chat_id(chat_id)
-    await bot.send_message(chat_id, "🔍 Scanning project files with UB-Mode skill principles...")
+    focus_badge = f"\n🧭 <b>Active Focus:</b> <i>{html.escape(focus_direction)}</i>" if focus_direction else ""
+    await bot.send_message(
+        chat_id,
+        f"🔍 Scanning project files with UB-Mode skill principles...{focus_badge}",
+        parse_mode="HTML"
+    )
     try:
         code_dump = collect_project_context(config.CONTAINER_PROJECT_PATH)
-        audit_result = await asyncio.to_thread(agent.analyze_codebase, code_dump)
-        await db.save_audit_result(audit_result)
+        audit_result = await asyncio.to_thread(agent.analyze_codebase, code_dump, focus_direction)
+        await db.save_audit_result(audit_result, focus_direction)
         summary_escaped = html.escape(audit_result.project_summary)
         await bot.send_message(
             chat_id,
-            f"✅ <b>Analysis Complete!</b>\n\n<b>Project Summary:</b>\n{summary_escaped}\n\n"
-            f"Generated <b>{len(audit_result.tasks)}</b> micro-tasks. Use /next to get your first task immediately!",
+            f"✅ <b>Analysis Complete!</b>{focus_badge}\n\n"
+            f"<b>Project Summary:</b>\n{summary_escaped}\n\n"
+            f"Generated <b>{len(audit_result.tasks)}</b> focused micro-tasks with ROI analysis. "
+            f"Use /next to start!",
             parse_mode="HTML",
             reply_markup=get_quick_actions_keyboard()
         )
@@ -164,9 +210,12 @@ async def run_codebase_scan(chat_id: int):
             parse_mode="HTML"
         )
 
+
 async def send_task_to_user(chat_id: int):
     """Fetches the next pending task and sends it (attaching a file if code exceeds Telegram limits)."""
     task = await db.get_next_task()
+
+    # 1. Check if backlog is empty FIRST before referencing task properties
     if not task:
         await bot.send_message(
             chat_id,
@@ -176,14 +225,17 @@ async def send_task_to_user(chat_id: int):
         )
         return
 
+    # 2. Safely parse profit_text now that task is guaranteed to be a dict
+    profit_text = html.escape(task.get("expected_profit") or "Improves code reliability and maintainability.")
+
     header = (
         f"🎯 <b>Micro-Task ({task['estimated_minutes']} mins)</b>\n"
         f"📂 <b>Category:</b> <code>{html.escape(task['category'])}</code>\n"
         f"📄 <b>File:</b> <code>{html.escape(task['file_path'])}</code>\n\n"
         f"<b>{html.escape(task['title'])}</b>\n"
         f"{html.escape(task['explanation'])}\n\n"
+        f"💎 <b>Why & Profit (ROI):</b>\n<i>{profit_text}</i>\n\n"
     )
-
     code_fix_escaped = html.escape(task["ready_code_fix"])
     full_text = f"{header}<b>Suggested Fix:</b>\n<pre><code>{code_fix_escaped}</code></pre>"
 
@@ -249,6 +301,57 @@ async def cmd_start(message: Message):
         parse_mode="HTML",
         reply_markup=get_quick_actions_keyboard()
     )
+
+@dp.message_reaction()
+async def handle_heart_reaction(event: MessageReactionUpdated):
+    # 1. Ignore reactions made by bots (including this bot itself) to prevent feedback loops
+    if not event.user or event.user.is_bot or not is_authorized(event.user.id):
+        return
+
+    # Helper function to extract normalized emoji strings
+    def get_emoji_set(reactions_list):
+        result = set()
+        for r in reactions_list:
+            if isinstance(r, ReactionTypeEmoji):
+                # Remove unicode variation selector \ufe0f if present
+                clean_emoji = r.emoji.replace("\ufe0f", "")
+                result.add(clean_emoji)
+        return result
+
+    old_emojis = get_emoji_set(event.old_reaction)
+    new_emojis = get_emoji_set(event.new_reaction)
+
+    # 2. Check if a new heart reaction was added (present in new, but not in old)
+    added_emojis = new_emojis - old_emojis
+    has_new_heart = any(emoji in ALLOWED_HEART_EMOJIS for emoji in added_emojis)
+
+    if not has_new_heart:
+        return
+
+    # 3. Set reciprocal reaction on the message from the bot
+    try:
+        await bot.set_message_reaction(
+            chat_id=event.chat.id,
+            message_id=event.message_id,
+            reaction=[ReactionTypeEmoji(emoji="🥰")]
+        )
+    except Exception as e:
+        logging.debug(f"Failed to set reciprocal reaction: {e}")
+
+    # 4. Pick a truly random reply from the list and send it
+    reply_text = random.choice(CUTE_HEART_REPLIES)
+    try:
+        await bot.send_message(
+            chat_id=event.chat.id,
+            text=reply_text,
+            reply_to_message_id=event.message_id
+        )
+    except Exception as e:
+        logging.error(f"Failed to send cute reply text: {e}")
+
+    # 5. Reset ping reminder counters in DB
+    await db.set_chat_id(event.chat.id)
+    await db.reset_ignored_count()
 
 @dp.message(Command("settings"))
 async def cmd_settings(message: Message):
@@ -484,12 +587,76 @@ async def handle_git_commit_push(callback: CallbackQuery):
 
 
 # Fallback handler AT THE VERY BOTTOM so the user NEVER gets silence
-@dp.message()
+@dp.message(Command("focus"))
+async def cmd_focus(message: Message):
+    await db.set_chat_id(message.chat.id)
+    parts = message.text.split(maxsplit=1)
+    if len(parts) > 1 and parts[1].strip():
+        await run_codebase_scan(message.chat.id, focus_direction=parts[1].strip())
+        return
+
+    await message.answer(
+        "🧭 <b>Focused Codebase Audit</b>\n\n"
+        "Choose a focus preset below, or simply <b>type any custom goal in the chat</b> "
+        "(e.g., <i>'Add rate limiting and protect database calls'</i>):",
+        parse_mode="HTML",
+        reply_markup=get_focus_presets_keyboard()
+    )
+
+@dp.callback_query(F.data.startswith("focus_preset:"))
+async def handle_focus_preset(callback: CallbackQuery):
+    key = callback.data.split(":")[1]
+    focus_text = FOCUS_PRESETS.get(key, "")
+    await callback.answer("🧭 Starting focused scan...")
+    await run_codebase_scan(callback.message.chat.id, focus_direction=focus_text)
+
+
+@dp.callback_query(F.data == "focus_custom:confirm")
+async def handle_custom_focus_confirm(callback: CallbackQuery):
+    chat_id = callback.message.chat.id
+    focus_text = pending_custom_focus.pop(chat_id, "")
+
+    # Always acknowledge the callback first to prevent button infinite loading
+    await callback.answer()
+
+    if not focus_text:
+        await callback.message.answer("Focus request expired, please type it again.")
+        return
+
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except Exception:
+        pass
+
+    try:
+        await run_codebase_scan(chat_id, focus_direction=focus_text)
+    except Exception as e:
+        logging.error(f"Error during custom focused scan: {e}")
+        await callback.message.answer(f"❌ Error during scan: {html.escape(str(e))}")
+
+# Smart Fallback: turns any plain text message into a 1-click custom focus direction!
+@dp.message(F.text)
 async def fallback_message_handler(message: Message):
     await db.set_chat_id(message.chat.id)
+    user_text = message.text.strip()
+
+    if len(user_text) >= 5 and not user_text.startswith("/"):
+        pending_custom_focus[message.chat.id] = user_text
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔍 Scan with this Focus", callback_data="focus_custom:confirm")],
+            [InlineKeyboardButton(text="🎯 Just get Next Task", callback_data="quick:next")]
+        ])
+        await message.answer(
+            f"🧭 <b>New Focus Direction Detected:</b>\n"
+            f"<i>\"{html.escape(user_text)}\"</i>\n\n"
+            f"Would you like me to scan the codebase specifically for improvements in this direction?",
+            parse_mode="HTML",
+            reply_markup=kb
+        )
+        return
+
     await message.answer(
-        "🤔 I didn't quite catch that command.\n\n"
-        "Use the <b>Menu</b> button on the left of your message bar or pick an action below:",
+        "🤔 Unknown command. Use the <b>Menu</b> button or pick an action below:",
         parse_mode="HTML",
         reply_markup=get_quick_actions_keyboard()
     )
@@ -510,7 +677,7 @@ async def main():
     scheduler.start()
 
     logging.info(f"Starting AI Project Mentor bot (Ping interval: {interval}h)...")
-    await dp.start_polling(bot)
+    await dp.start_polling(bot, allowed_updates=["message", "callback_query", "message_reaction"])
 
 if __name__ == "__main__":
     asyncio.run(main())

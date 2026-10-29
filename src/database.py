@@ -18,7 +18,12 @@ class Database:
                     ping_interval_hours INTEGER DEFAULT {default_interval}
                 )
             """)
-            for col_def in ["chat_id INTEGER", f"ping_interval_hours INTEGER DEFAULT {default_interval}", "is_verified INTEGER DEFAULT 0"]:
+            for col_def in [
+                "chat_id INTEGER",
+                f"ping_interval_hours INTEGER DEFAULT {default_interval}",
+                "is_verified INTEGER DEFAULT 0",
+                "current_focus TEXT DEFAULT ''"
+            ]:
                 try:
                     await db.execute(f"ALTER TABLE project_state ADD COLUMN {col_def}")
                 except Exception:
@@ -36,6 +41,10 @@ class Database:
                     status TEXT DEFAULT 'pending' -- pending, completed, skipped
                 )
             """)
+            try:
+                await db.execute("ALTER TABLE tasks ADD COLUMN expected_profit TEXT DEFAULT ''")
+            except Exception:
+                pass
             await db.commit()
 
     async def set_chat_id(self, chat_id: int):
@@ -72,19 +81,31 @@ class Database:
             row = await cursor.fetchone()
             return row[0] if row and row[0] else default_hours
 
-    async def save_audit_result(self, audit: ProjectAuditResult):
+    async def save_audit_result(self, audit: ProjectAuditResult, focus_direction: str = ""):
+        """Saves project summary, active focus direction, and populates pending tasks with ROI."""
         async with aiosqlite.connect(self.db_path) as db:
-            await db.execute(
-                "INSERT INTO project_state (id, summary, ignored_count) VALUES (1, ?, 0) ON CONFLICT(id) DO UPDATE SET summary = excluded.summary, ignored_count = 0",
-                (audit.project_summary,))
+            await db.execute("""
+                INSERT INTO project_state (id, summary, ignored_count, current_focus)
+                VALUES (1, ?, 0, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    summary = excluded.summary,
+                    ignored_count = 0,
+                    current_focus = excluded.current_focus
+            """, (audit.project_summary, focus_direction))
+
             await db.execute("DELETE FROM tasks WHERE status = 'pending'")
-            task_rows = [
-                (t.category, t.file_path, t.title, t.explanation, t.ready_code_fix, t.estimated_minutes)
-                for t in audit.tasks
-            ]
-            await db.executemany(
-                "INSERT INTO tasks (category, file_path, title, explanation, ready_code_fix, estimated_minutes) VALUES (?, ?, ?, ?, ?, ?)",
-                task_rows)
+
+            for t in audit.tasks:
+                await db.execute("""
+                    INSERT INTO tasks (
+                        category, file_path, title, explanation,
+                        expected_profit, ready_code_fix, estimated_minutes
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                """, (
+                    t.category, t.file_path, t.title, t.explanation,
+                    t.expected_profit, t.ready_code_fix, t.estimated_minutes
+                ))
             await db.commit()
 
     async def get_next_task(self) -> Optional[dict]:

@@ -16,6 +16,9 @@ class BacklogTask(BaseModel):
     file_path: str = Field(description="Relative file path associated with the task")
     title: str = Field(description="Short, actionable task title (3-7 words)")
     explanation: str = Field(description="Clear explanation of why this matters and the value it brings (max 3 sentences)")
+    expected_profit: str = Field(
+        description="Concrete ROI/benefit: why this approach is better and what measurable profit it brings (performance, security, maintainability, or UX)"
+    )
     ready_code_fix: str = Field(
         description="Concise, ready-to-use code snippet or function to resolve the issue (strictly under 35 lines)"
     )
@@ -43,21 +46,29 @@ class MentorAgent:
             return path.read_text(encoding="utf-8", errors="ignore")
         return "Follow clean, minimal, and idempotent coding practices."
 
-    def analyze_codebase(self, codebase_dump: str) -> ProjectAuditResult:
-        """Analyzes the codebase using loaded skills and generates a backlog of micro-tasks."""
+    def analyze_codebase(self, codebase_dump: str, focus_direction: str = "") -> ProjectAuditResult:
+        """Analyzes the codebase with an optional user-defined focus and calculates task ROI."""
+        focus_instruction = (
+            f"\nCRITICAL USER FOCUS DIRECTION: '{focus_direction}'\n"
+            "Prioritize scanning the files specifically through this lens. "
+            "Every generated task MUST directly advance this focus goal.\n"
+            if focus_direction else
+            "\nPerform a comprehensive audit covering security vulnerabilities, unfinished TODOs, and high-impact improvements.\n"
+        )
+
         prompt = (
             "You are a senior Tech Lead and AI Co-founder. Your goal is to help a solo developer "
-            "maintain momentum and ship their pet project to production.\n"
+            "ship their project to production.\n"
             "Strictly apply your engineering skill principles (First Make it Work, Laziness Protocol, "
-            "Subtract Before You Add, Boundary Discipline, Fix Root Causes) when proposing tasks.\n\n"
+            "Subtract Before You Add, Boundary Discipline, Fix Root Causes) when proposing tasks.\n"
+            f"{focus_instruction}\n"
             "Analyze the provided project source code:\n"
-            "1. Summarize the core purpose and value proposition of the project (project_summary).\n"
-            "2. Identify real security vulnerabilities (vulnerability), unfinished code/TODOs/stubs (unfinished_todo), "
-            "and high-impact improvements (improvement).\n"
-            "3. Break findings down into bite-sized micro-tasks taking 10-20 minutes each.\n"
+            "1. Summarize the core purpose of the project (project_summary).\n"
+            "2. Break findings down into bite-sized micro-tasks taking 10-20 minutes each.\n"
+            "3. For EVERY task, fill out 'expected_profit': clearly justify WHY this change is better "
+            "and what concrete profit/ROI the developer gets after implementing it.\n"
             "4. Provide a concrete, copy-pasteable code snippet (ready_code_fix) under 35 lines. "
-            "Use the line numbers in the source dump to reference the exact lines in your comments, "
-            "but DO NOT include line number prefixes inside the code snippet itself.\n\n"
+            "Use line numbers to reference locations, but DO NOT include line number prefixes inside the snippet.\n\n"
             f"PROJECT SOURCE CODE:\n{codebase_dump}"
         )
 
