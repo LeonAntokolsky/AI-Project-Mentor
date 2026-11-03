@@ -10,8 +10,12 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
 
 
-def _register_cyrillic_font():
-    """Registers a Cyrillic-compatible font for ReportLab."""
+from functools import lru_cache
+
+
+@lru_cache(maxsize=1)
+def _register_cyrillic_font() -> str:
+    """Registers a Cyrillic-compatible font for ReportLab with cached lookup."""
     font_paths = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
