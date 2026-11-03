@@ -10,6 +10,7 @@ import config
 import json
 import subprocess
 import py_compile
+from report_generator import generate_session_pdf_report
 from typing import Dict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -18,7 +19,7 @@ from aiogram.filters import Command
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup,
     InlineKeyboardButton, BufferedInputFile, BotCommand,
-    MessageReactionUpdated, ReactionTypeEmoji
+    MessageReactionUpdated, ReactionTypeEmoji, FSInputFile
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from google.genai.errors import APIError
@@ -28,10 +29,10 @@ from database import Database
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 
-bot = Bot(token=config.TELEGRAM_BOT_TOKEN)
+bot = Bot(config.TELEGRAM_BOT_TOKEN)
 dp = Dispatcher()
 db = Database(config.DB_PATH)
-agent = MentorAgent(api_key=config.GEMINI_API_KEY)
+agent = MentorAgent()
 scheduler = AsyncIOScheduler()
 
 # Temporary in-memory store for custom text focus confirmation
@@ -143,6 +144,46 @@ async def send_settings_menu(target: Message | CallbackQuery):
     )
     await send(text, parse_mode="HTML", reply_markup=get_settings_keyboard(hours))
 
+
+async def send_session_pdf_report(chat_id: int):
+    """Generates PDF report of completed tasks and sends it to the Telegram chat."""
+    completed_tasks = await db.get_completed_tasks()
+    current_focus = await db.get_current_focus()
+
+    if not completed_tasks:
+        await bot.send_message(
+            chat_id,
+            "ℹ️ <b>No fixes were applied in this session.</b> PDF report was not created.",
+            parse_mode="HTML",
+            reply_markup=get_quick_actions_keyboard()
+        )
+        return
+
+    status_msg = await bot.send_message(chat_id, "📄 <b>Generating PDF session report...</b>", parse_mode="HTML")
+
+    try:
+        pdf_path = await asyncio.to_thread(
+            generate_session_pdf_report, current_focus, completed_tasks
+        )
+        doc_file = FSInputFile(str(pdf_path), filename=pdf_path.name)
+
+        await bot.send_document(
+            chat_id,
+            document=doc_file,
+            caption=(
+                f"📊 <b>Session Complete!</b>\n\n"
+                f"✅ Applied fixes: <b>{len(completed_tasks)}</b>\n"
+                f"📁 Saved locally to: <code>{pdf_path}</code>"
+            ),
+            parse_mode="HTML",
+            reply_markup=get_quick_actions_keyboard()
+        )
+        await status_msg.delete()
+    except Exception as e:
+        logging.error(f"Error generating PDF report: {e}")
+        await status_msg.edit_text(f"❌ <b>Failed to generate PDF report:</b> {html.escape(str(e))}", parse_mode="HTML")
+
+
 @dp.message(Command("auth"))
 async def cmd_auth(message: Message):
     if ALLOWED_USER_ID and message.from_user.id != ALLOWED_USER_ID:
@@ -192,13 +233,14 @@ async def setup_bot_commands(bot_instance: Bot):
     await bot_instance.set_my_commands(commands)
 
 def get_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
-    """Builds interactive buttons for a newly received task."""
+    """Builds interactive buttons for a task including an explicit Stop & Report action."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🛠 Apply Fix Auto", callback_data=f"task:apply:{task_id}")],
         [
             InlineKeyboardButton(text="✅ Done Manually", callback_data=f"task:done:{task_id}"),
             InlineKeyboardButton(text="🔄 Reject & Alt", callback_data=f"task:reject:{task_id}")
-        ]
+        ],
+        [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
     ])
 
 def get_quick_actions_keyboard() -> InlineKeyboardMarkup:
@@ -298,12 +340,7 @@ async def send_task_to_user(chat_id: int):
 
     # 1. Check if backlog is empty FIRST before referencing task properties
     if not task:
-        await bot.send_message(
-            chat_id,
-            "🎉 You've completed all tasks in the current backlog!\n"
-            "Run /scan to generate new tasks or /motivate for a co-founder check-in.",
-            reply_markup=get_quick_actions_keyboard()
-        )
+        await send_session_pdf_report(chat_id)
         return
 
     # 2. Safely parse profit_text now that task is guaranteed to be a dict
@@ -469,12 +506,7 @@ async def cmd_next(message: Message):
 @dp.message(Command("status"))
 async def cmd_status(message: Message):
     await db.set_chat_id(message.chat.id)
-    stats = await db.get_stats()
-    await message.answer(
-        format_status_message(stats),
-        parse_mode="HTML",
-        reply_markup=get_quick_actions_keyboard()
-    )
+    await send_status_view(message)
 
 @dp.message(Command("motivate"))
 async def cmd_motivate(message: Message):
@@ -554,6 +586,12 @@ async def handle_task_actions(callback: CallbackQuery):
             parse_mode="HTML",
             reply_markup=kb_post_done
         )
+
+    elif action == "stop_session":
+        await callback.answer("Stopping session...")
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await send_session_pdf_report(chat_id)
+        return
 
     elif action == "verify":
         await callback.answer("🔍 Inspecting code changes...")
