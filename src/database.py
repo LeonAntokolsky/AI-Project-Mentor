@@ -1,7 +1,7 @@
 import json
 import aiosqlite
 from contextlib import asynccontextmanager
-from typing import Optional
+from typing import Optional, Any
 from agent import BacklogTask, ProjectAuditResult
 from datetime import datetime
 
@@ -64,7 +64,7 @@ class Database:
                     pass
             await db.commit()
 
-    async def _update_state_field(self, column: str, value: any):
+    async def _update_state_field(self, column: str, value: Any):
         """Helper to upsert a single field in project_state for row id=1."""
         allowed_columns = {
             "chat_id", "ping_interval_hours", "is_verified", "summary",
@@ -105,6 +105,8 @@ class Database:
 
     async def set_ping_interval(self, interval_hours: int):
         """Sets or updates the ping interval in hours."""
+        if not isinstance(interval_hours, int) or interval_hours < 1 or interval_hours > 168:
+            raise ValueError(f"Invalid ping interval: {interval_hours}. Must be between 1 and 168 hours.")
         await self._update_state_field("ping_interval_hours", interval_hours)
 
     async def set_user_verified(self):
