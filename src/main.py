@@ -256,7 +256,7 @@ async def run_codebase_scan(chat_id: int, focus_direction: str = ""):
         parse_mode="HTML"
     )
     try:
-        code_dump = collect_project_context(config.CONTAINER_PROJECT_PATH)
+        code_dump = await asyncio.to_thread(collect_project_context, config.CONTAINER_PROJECT_PATH)
         audit_result = await asyncio.to_thread(agent.analyze_codebase, code_dump, focus_direction)
         await db.save_audit_result(audit_result, focus_direction)
         summary_escaped = html.escape(audit_result.project_summary)
