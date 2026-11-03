@@ -741,8 +741,12 @@ async def handle_task_actions(callback: CallbackQuery):
                     subprocess.run(["git", "config", "user.email", "mentor@local"], cwd=proj_dir, check=False)
                 for f in applied_files:
                     subprocess.run(["git", "add", str(f)], cwd=proj_dir, check=False)
-                commit_msg = f"refactor: {task['title'].lower()}"
-                subprocess.run(["git", "commit", "-m", commit_msg], cwd=proj_dir, check=False)
+                    rel_name = str(f.relative_to(proj_dir)) if f.is_relative_to(proj_dir) else f.name
+                    scope = f.stem
+                    is_primary = (rel_name == task.get("file_path", "").lstrip("/\\"))
+                    action_detail = "apply" if is_primary else "update dependent"
+                    f_commit_msg = f"refactor({scope}): {action_detail} {task['title'].lower()}"
+                    subprocess.run(["git", "commit", "-m", f_commit_msg], cwd=proj_dir, check=False)
             except Exception as e:
                 logging.debug(f"Git auto-commit failed: {e}")
 
