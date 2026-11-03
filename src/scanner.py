@@ -7,7 +7,7 @@ from pathlib import Path
 IGNORE_DIRS = {
     ".git", ".venv", "venv", "env", "node_modules", "__pycache__",
     ".idea", ".vscode", "dist", "build", "migrations", "coverage",
-    ".pytest_cache", ".mypy_cache", ".ruff_cache"
+    ".pytest_cache", ".mypy_cache", ".ruff_cache", "reports" 
 }
 IGNORE_FILES = {
     ".env", ".env.local", ".env.production", ".auth_token", "mentor.db",

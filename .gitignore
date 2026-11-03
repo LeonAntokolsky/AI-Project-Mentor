@@ -1,6 +1,8 @@
 # Secrets and environment variables
 .env
 data/.auth_token
+data/reports/
+data/*.pdf
 
 # Local container SQLite databases
 data/*.db
