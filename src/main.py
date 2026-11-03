@@ -815,21 +815,26 @@ async def handle_git_commit_push(callback: CallbackQuery):
             await callback.message.answer("ℹ️ <b>Working tree clean:</b> No new changes to commit.", parse_mode="HTML")
             return
 
-        commit_msg = await asyncio.to_thread(agent.generate_commit_message, staged_diff)
-        if not commit_msg:
-            commit_msg = "chore: update project files"
-
-        commit_res = subprocess.run(
-            ["git", "commit", "-m", commit_msg],
-            cwd=proj_dir, capture_output=True, text=True, errors="replace"
-        )
-        if commit_res.returncode != 0:
-            err_output = commit_res.stderr.strip() or commit_res.stdout.strip()
-            await callback.message.answer(
-                f"⚠️ <b>Git Commit Skipped:</b>\n<pre><code>{html.escape(err_output)}</code></pre>",
-                parse_mode="HTML"
-            )
+        subprocess.run(["git", "reset"], cwd=proj_dir, check=False)
+        status_proc = subprocess.run(["git", "status", "--porcelain"], cwd=proj_dir, capture_output=True, text=True)
+        changed_entries = [line.strip().split(maxsplit=1)[-1] for line in status_proc.stdout.splitlines() if line.strip()]
+        commit_summaries = []
+        for file_rel in changed_entries:
+            clean_file = file_rel.strip('"\'')
+            diff_proc = subprocess.run(["git", "diff", "--", clean_file], cwd=proj_dir, capture_output=True, text=True)
+            file_diff = diff_proc.stdout.strip()
+            if not file_diff:
+                f_obj = Path(proj_dir) / clean_file
+                file_diff = f_obj.read_text(encoding="utf-8", errors="ignore")[:3000] if f_obj.is_file() else "new file"
+            file_msg = await asyncio.to_thread(agent.generate_file_commit_message, clean_file, file_diff)
+            subprocess.run(["git", "add", clean_file], cwd=proj_dir, check=False)
+            commit_res = subprocess.run(["git", "commit", "-m", file_msg], cwd=proj_dir, capture_output=True, text=True)
+            if commit_res.returncode == 0:
+                commit_summaries.append(f"• {clean_file}: {file_msg}")
+        if not commit_summaries:
+            await callback.message.answer("ℹ️ <b>Git:</b> No files were committed.", parse_mode="HTML")
             return
+        commit_msg = "\n".join(commit_summaries)
 
         push_res = subprocess.run(
             ["git", "push"],
