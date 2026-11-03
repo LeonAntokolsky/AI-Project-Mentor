@@ -244,10 +244,11 @@ def get_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
     ])
 
 def get_post_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
-    """Builds navigation keyboard after a task is finished or applied."""
+    """Builds standardized keyboard after a task is marked done or auto-applied."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="🔍 Verify Fix with AI", callback_data=f"task:verify:{task_id}")],
-        [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")]
+        [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
+        [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
     ])
 
 def get_quick_actions_keyboard() -> InlineKeyboardMarkup:
@@ -566,6 +567,7 @@ async def handle_task_actions(callback: CallbackQuery):
     chat_id = callback.message.chat.id
     await db.set_chat_id(chat_id)
 
+    # 1. Остановка сессии и генерация PDF (не требует task_id)
     if action == "stop_session":
         await callback.answer("Stopping session...")
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -579,29 +581,24 @@ async def handle_task_actions(callback: CallbackQuery):
     task_id = int(parts[2])
     task = await db.get_task_by_id(task_id)
 
-    # Разрешаем запуск verify даже если задача уже в статусе 'completed'
     if not task or (action != "verify" and task['status'] != 'pending'):
         await callback.answer("Task already processed or missing.", show_alert=True)
         return
 
+    # 2. Ручная отметка выполнения
     if action == "done":
         await db.update_task_status(task_id, "completed")
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.answer("Marked as done!")
-
-        kb_post_done = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔍 Verify Fix with AI", callback_data=f"task:verify:{task_id}")],
-            [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
-            [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
-        ])
+        await callback.answer()
         await callback.message.answer(
             f"✅ <b>Task marked as done manually!</b>\n"
             f"File: <code>{html.escape(task['file_path'])}</code>\n\n"
             f"Click below to verify syntax & logic with AI:",
             parse_mode="HTML",
-            reply_markup=kb_post_done
+            reply_markup=get_post_task_keyboard(task_id)
         )
 
+    # 3. AI-проверка
     elif action == "verify":
         await callback.answer("🔍 Inspecting code changes...")
         status_msg = await callback.message.reply(
@@ -645,6 +642,7 @@ async def handle_task_actions(callback: CallbackQuery):
                 reply_markup=kb_reverify
             )
 
+    # 4. Авто-применение
     elif action == "apply":
         await callback.answer("Applying patches & checking syntax...")
         proj_dir = Path(config.CONTAINER_PROJECT_PATH)
@@ -673,18 +671,9 @@ async def handle_task_actions(callback: CallbackQuery):
             s_block = patch["search_block"]
             r_fix = patch["ready_code_fix"]
 
-            normalized_content = content.replace("\r\n", "\n")
-            norm_s_block = s_block.replace("\r\n", "\n")
-            norm_r_fix = r_fix.replace("\r\n", "\n")
-
-            match_block = norm_s_block if norm_s_block and norm_s_block in normalized_content else (
-                norm_s_block.strip() if norm_s_block and norm_s_block.strip() in normalized_content else ""
-            )
-            if not match_block:
+            new_content = apply_text_patch(content, s_block, r_fix)
+            if not new_content:
                 continue
-
-            match_fix = norm_r_fix if match_block == norm_s_block else norm_r_fix.strip()
-            new_content = normalized_content.replace(match_block, match_fix, 1)
             target_path.write_text(new_content, encoding="utf-8")
             applied_files.append(target_path)
 
@@ -721,15 +710,10 @@ async def handle_task_actions(callback: CallbackQuery):
             await db.update_task_status(task_id, "completed")
             await callback.message.edit_reply_markup(reply_markup=None)
 
-            kb_applied = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔍 Verify Fix with AI", callback_data=f"task:verify:{task_id}")],
-                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
-                [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
-            ])
             await callback.message.answer(
                 f"✅ <b>Fix applied to {len(applied_files)} file(s) and committed!</b>",
                 parse_mode="HTML",
-                reply_markup=kb_applied
+                reply_markup=get_post_task_keyboard(task_id)
             )
         else:
             await callback.message.answer(
@@ -737,6 +721,7 @@ async def handle_task_actions(callback: CallbackQuery):
                 parse_mode="HTML"
             )
 
+    # 5. Отклонение задачи
     elif action == "reject":
         await callback.message.edit_reply_markup(reply_markup=None)
         status_msg = await callback.message.answer("🧠 Generating an alternative strategy...")
