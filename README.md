@@ -85,11 +85,48 @@ Before source code context reaches the LLM, regex pattern filters strip:
 - **Natural Language Focus**: Type any phrase directly in chat (e.g., *"Refactor database pool to asyncpg"*) to trigger a targeted scan.
 - **Reject & Re-strategize**: Dislike a proposed fix? Hit **Reject & Alt** to have Gemini generate an alternative architectural pattern for the same issue.
 
-## Setup
-1. Clone the repository: `git clone <repo-url> && cd ai-project-mentor`
-2. Create a `.env` file with `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, and optional `TARGET_PROJECT_PATH`.
-3. Verify `.env` is listed in your `.gitignore` before committing.
-4. Run `docker-compose up --build`.
+## 🛠️ Quick Start & Installation
+
+### 1. Prerequisites
+- [Docker & Docker Compose](https://docs.docker.com/get-docker/) installed.
+- A [Google Gemini API Key](https://aistudio.google.com/app/apikey).
+- A Telegram Bot Token from [@BotFather](https://t.me/BotFather).
+
+### 2. Clone and Configure
+```bash
+# Clone the repository
+git clone https://github.com/your-username/ai-project-mentor.git
+cd ai-project-mentor
+
+# Create configuration file from template
+cp .env.example .env 2>/dev/null || touch .env
+```
+
+### 3. Environment Variables Reference
+
+Edit `.env` with your project parameters:
+
+| Variable | Required | Default | Description |
+| :--- | :---: | :---: | :--- |
+| `GEMINI_API_KEY` | **Yes** | — | Google Gemini API secret key. |
+| `TELEGRAM_BOT_TOKEN` | **Yes** | — | Telegram Bot token issued by @BotFather. |
+| `TARGET_PROJECT_PATH` | No | `.` | Absolute or relative host path to the project you want the bot to audit. |
+| `ALLOWED_USER_ID` | No | `0` | Telegram User ID allowed to control the bot (`0` allows any user who passes filesystem auth). |
+| `PING_INTERVAL_HOURS` | No | `24` | Scheduled reminder interval (can also be changed dynamically in Telegram). |
+| `GEMINI_MODEL_NAME` | No | `gemini-3.8-flash` | Gemini model identifier used for analysis and verification. |
+| `CONTAINER_PROJECT_PATH`| No | `/workspace/project`| Container directory where target project is mounted. |
+| `DB_PATH` | No | `/app/data/mentor.db`| SQLite database location. |
+
+### 4. Launch Containerized Agent
+```bash
+# Build and start services in background
+docker-compose up --build -d
+
+# View streaming logs
+docker-compose logs -f mentor-agent
+```
+
+> 💡 **Persistent Data**: SQLite database and generated PDF reports are automatically persisted in the host `./data` directory.
 
 ## Usage
 - Send `/start` to the Telegram bot to register.
