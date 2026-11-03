@@ -151,9 +151,9 @@ async def cmd_auth(message: Message):
     token = parts[1].strip() if len(parts) > 1 else ""
     if token and secrets.compare_digest(token, get_or_create_fs_token()):
         await db.set_user_verified(message.chat.id)
-        await message.answer("🔐 <b> Access confirmed!  You have proven to have access to the server’s file system.", parse_mode="HTML")
+        await message.answer("🔐 <b>Access confirmed!</b> You have proven access to the server's filesystem.", parse_mode="HTML")
     else:
-        await message.answer("❌ Invalid token. Verify the data/. auth_token file on the server.", parse_mode="HTML")
+        await message.answer("❌ Invalid token. Verify the data/.auth_token file on the server.", parse_mode="HTML")
 
 async def unverified_filter(event: Message | CallbackQuery) -> bool:
     if ALLOWED_USER_ID and event.from_user.id != ALLOWED_USER_ID:
@@ -631,17 +631,7 @@ async def handle_task_actions(callback: CallbackQuery):
             target_path.write_text(new_content, encoding="utf-8")
             applied_files.append(target_path)
 
-            syntax_error = None
-            if target_path.suffix == ".py":
-                try:
-                    py_compile.compile(target_path, doraise=True)
-                except py_compile.PyCompileError as e:
-                    syntax_error = str(e)
-            elif target_path.suffix == ".json":
-                try:
-                    json.loads(target_path.read_text(encoding="utf-8"))
-                except Exception as e:
-                    syntax_error = str(e)
+            syntax_error = check_file_syntax(target_path)
 
             if syntax_error:
                 target_path.write_text(content, encoding="utf-8")
