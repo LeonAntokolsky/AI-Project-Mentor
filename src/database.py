@@ -84,12 +84,23 @@ class Database:
         """Sets or updates the active Telegram chat ID."""
         await self._update_state_field("chat_id", chat_id)
 
+    async def _get_state_field(self, column: str, default: any = None) -> any:
+        """Helper to fetch a single column from project_state for row id=1."""
+        allowed_columns = {
+            "chat_id", "ping_interval_hours", "is_verified", "summary",
+            "current_focus", "current_session_id", "ignored_count"
+        }
+        if column not in allowed_columns:
+            raise ValueError(f"Invalid state column: {column}")
+
+        async with self._get_db() as db:
+            cursor = await db.execute(f"SELECT {column} FROM project_state WHERE id = 1")
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] is not None else default
+
     async def get_chat_id(self) -> Optional[int]:
         """Retrieves the registered Telegram chat_id."""
-        async with self._get_db() as db:
-            cursor = await db.execute("SELECT chat_id FROM project_state WHERE id = 1")
-            row = await cursor.fetchone()
-            return row[0] if row and row[0] else None
+        return await self._get_state_field("chat_id")
 
     async def set_ping_interval(self, interval_hours: int):
         """Sets or updates the ping interval in hours."""
@@ -101,10 +112,7 @@ class Database:
 
     async def get_ping_interval(self, default_hours: int = 24) -> int:
         """Retrieves the current reminder interval in hours."""
-        async with self._get_db() as db:
-            cursor = await db.execute("SELECT ping_interval_hours FROM project_state WHERE id = 1")
-            row = await cursor.fetchone()
-            return row[0] if row and row[0] else default_hours
+        return await self._get_state_field("ping_interval_hours", default_hours)
 
     async def get_completed_tasks(self) -> list[dict]:
         """Fetches completed tasks belonging strictly to the active session."""
