@@ -12,7 +12,8 @@ class Database:
     @asynccontextmanager
     async def _get_db(self):
         """Centralized async context manager providing a configured SQLite connection."""
-        async with aiosqlite.connect(self.db_path) as db:
+        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
+            await db.execute("PRAGMA journal_mode=WAL;")
             db.row_factory = aiosqlite.Row
             yield db
 
