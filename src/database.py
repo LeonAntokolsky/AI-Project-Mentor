@@ -129,10 +129,7 @@ class Database:
 
     async def get_current_focus(self) -> str:
         """Retrieves the active session focus direction."""
-        async with self._get_db() as db:
-            cursor = await db.execute("SELECT current_focus FROM project_state WHERE id = 1")
-            row = await cursor.fetchone()
-            return row[0] if row and row[0] else "General Code Refactoring"
+        return (await self._get_state_field("current_focus")) or "General Code Refactoring"
 
     async def save_audit_result(self, audit: ProjectAuditResult, focus_direction: str = ""):
         """Saves project summary, active focus direction, populates tasks, and initializes session_id."""
@@ -262,7 +259,4 @@ class Database:
 
     async def is_user_verified(self) -> bool:
         """Checks if the active user has verified filesystem ownership."""
-        async with self._get_db() as db:
-            cursor = await db.execute("SELECT is_verified FROM project_state WHERE id = 1")
-            row = await cursor.fetchone()
-            return bool(row and row[0])
+        return bool(await self._get_state_field("is_verified", 0))
