@@ -776,30 +776,30 @@ async def handle_task_actions(callback: CallbackQuery):
 async def handle_git_commit_push(callback: CallbackQuery):
     await callback.answer()
 
-    # Отправляем сообщение-индикатор ожидания
+    # Send initial processing status message
     status_msg = await callback.message.reply(
-        "⏳ <b>Анализирую изменения и обновляю Git...</b>\n"
-        "<i>Пожалуйста, подождите. ИИ генерирует коммиты и отправляет их в репозиторий...</i>",
+        "⏳ <b>Analyzing changes and updating Git...</b>\n"
+        "<i>Please wait. AI is generating commit messages and updating the repository...</i>",
         parse_mode="HTML"
     )
 
     proj_dir = config.CONTAINER_PROJECT_PATH
 
     try:
-        # 1. Безопасность и настройки Git
+        # 1. Security & Git settings
         subprocess.run(["git", "config", "--global", "--add", "safe.directory", proj_dir], check=False)
 
-        # Гарантируем наличие файла .gitkeep в папке data/
+        # Ensure .gitkeep exists in data/ directory
         data_dir = Path(proj_dir) / "data"
         if data_dir.exists():
             gitkeep = data_dir / ".gitkeep"
             if not gitkeep.exists():
                 gitkeep.touch()
 
-        # 2. Добавляем изменения в индекс
+        # 2. Stage all changes
         subprocess.run(["git", "add", "-A"], cwd=proj_dir, check=False)
 
-        # 3. Безопасная проверка заиндексированных изменений
+        # 3. Safely check staged changes
         staged_proc = subprocess.run(
             ["git", "diff", "--cached", "HEAD"],
             cwd=proj_dir, capture_output=True, text=True, errors="replace"
@@ -814,10 +814,10 @@ async def handle_git_commit_push(callback: CallbackQuery):
             staged_diff = staged_proc_all.stdout.strip()
 
         if not staged_diff:
-            await status_msg.edit_text("ℹ️ <b>Working tree clean:</b> Нет новых изменений для коммита.", parse_mode="HTML")
+            await status_msg.edit_text("ℹ️ <b>Working tree clean:</b> No new changes to commit.", parse_mode="HTML")
             return
 
-        # 4. Пофайловая генерация сообщений коммитов через ИИ
+        # 4. File-by-file AI commit message generation
         subprocess.run(["git", "reset"], cwd=proj_dir, check=False)
         status_proc = subprocess.run(["git", "status", "--porcelain"], cwd=proj_dir, capture_output=True, text=True)
         changed_entries = [line.strip().split(maxsplit=1)[-1] for line in status_proc.stdout.splitlines() if line.strip()]
@@ -838,12 +838,12 @@ async def handle_git_commit_push(callback: CallbackQuery):
                 commit_summaries.append(f"• {clean_file}: {file_msg}")
 
         if not commit_summaries:
-            await status_msg.edit_text("ℹ️ <b>Git:</b> Изменения не были закоммичены.", parse_mode="HTML")
+            await status_msg.edit_text("ℹ️ <b>Git:</b> No changes were committed.", parse_mode="HTML")
             return
 
         commit_msg = "\n".join(commit_summaries)
 
-        # 5. Выполнение push в отдельном потоке
+        # 5. Perform push in a separate thread
         push_res = await asyncio.to_thread(
             subprocess.run,
             ["git", "push", "origin", "HEAD"],
@@ -861,7 +861,7 @@ async def handle_git_commit_push(callback: CallbackQuery):
             else:
                 push_status = f"⚠️ <i>(push skipped: {html.escape(err_msg[:80])})</i>"
 
-        # 6. Обновляем статусное сообщение результатами
+        # 6. Update status message with results
         await status_msg.edit_text(
             f"✅ <b>Committed successfully!</b>\n"
             f"Status: {push_status}\n\n"
