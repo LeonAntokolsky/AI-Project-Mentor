@@ -85,15 +85,8 @@ class Database:
         """Sets or updates the active Telegram chat ID."""
         await self._update_state_field("chat_id", chat_id)
 
-    async def _get_state_field(self, column: str, default: any = None) -> any:
-        """Helper to fetch a single column from project_state for row id=1."""
-        allowed_columns = {
-            "chat_id", "ping_interval_hours", "is_verified", "summary",
-            "current_focus", "current_session_id", "ignored_count"
-        }
-        if column not in allowed_columns:
-            raise ValueError(f"Invalid state column: {column}")
-
+    async def _get_state_field(self, column: str, default: Any = None) -> Any:
+        """Helper to fetch a single field from project_state for row id=1."""
         async with self._get_db() as db:
             cursor = await db.execute(f"SELECT {column} FROM project_state WHERE id = 1")
             row = await cursor.fetchone()
@@ -103,19 +96,14 @@ class Database:
         """Retrieves the registered Telegram chat_id."""
         return await self._get_state_field("chat_id")
 
-    async def set_ping_interval(self, interval_hours: int):
-        """Sets or updates the ping interval in hours."""
-        if not isinstance(interval_hours, int) or interval_hours < 1 or interval_hours > 168:
-            raise ValueError(f"Invalid ping interval: {interval_hours}. Must be between 1 and 168 hours.")
-        await self._update_state_field("ping_interval_hours", interval_hours)
-
     async def set_user_verified(self):
         """Marks user as verified for filesystem access."""
         await self._update_state_field("is_verified", 1)
 
-    async def get_ping_interval(self, default_hours: int = 24) -> int:
-        """Retrieves the current reminder interval in hours."""
-        return await self._get_state_field("ping_interval_hours", default_hours)
+    async def set_ping_interval(self, interval_hours: int):
+        """Sets or updates the ping interval in hours (clamped between 1 and 168 hours)."""
+        clamped_hours = max(1, min(168, interval_hours))
+        await self._update_state_field("ping_interval_hours", clamped_hours)
 
     async def get_completed_tasks(self) -> list[dict]:
         """Fetches completed tasks belonging strictly to the active session."""
