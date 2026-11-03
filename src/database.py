@@ -55,6 +55,7 @@ class Database:
                 ("tasks", "expected_profit TEXT DEFAULT ''"),
                 ("tasks", "search_block TEXT DEFAULT ''"),
                 ("tasks", "dependent_patches TEXT DEFAULT '[]'"),
+                ("tasks", "git_commit_message TEXT DEFAULT ''"),
             ]
             for table, col in migrations:
                 try:
