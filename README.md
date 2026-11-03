@@ -161,5 +161,35 @@ When a micro-task arrives in Telegram, the message contains the ROI rationale, e
 - **🔄 Reject & Alt**: Rejects the suggested pattern and commands Gemini to devise an alternate solution.
 - **🔍 Verify Fix with AI**: Runs automated verification of current file content against task requirements.
 - **🛑 Stop Session & Get PDF Report**: Finalizes current session and delivers a formatted PDF audit document.
-- Use `/next` to receive and apply micro-tasks.
-- Tap **Commit & Push Changes** to record fixes to your Git history.
+## 📦 Git Automation & One-Click Push
+
+- **Automatic Safe Directory Registration**: The container configures `git config --global --add safe.directory` to prevent Docker user ID mismatch errors.
+- **AI Conventional Commit Messages**: When you tap **📦 Commit & Push Changes**, the bot analyzes the staged `git diff` using Gemini to generate compliant conventional messages (e.g., `feat: implement redis token caching`).
+- **SSH Remote Push**: By mounting `~/.ssh:/root/.ssh:ro`, the container securely pushes commits to remote repositories (GitHub, GitLab) using your existing host SSH keys.
+
+---
+
+## 📄 Automated PDF Session Reports
+
+Every time you complete a refactoring session or tap **Stop Session & Get PDF Report**, the bot uses ReportLab to generate a clean A4 PDF document containing:
+- Session focus and execution timestamp.
+- Total number of fixes applied.
+- Before / After diff blocks for each completed task.
+- ROI and architectural reasoning for every fix.
+- Embedded Cyrillic-compatible fonts (`DejaVuSans`) ensuring clean international character rendering.
+
+Reports are saved to `data/reports/Report_<timestamp>.pdf` and sent directly to your Telegram chat.
+
+---
+
+## 💡 Solo-Developer Best Practices
+
+1. **Work in Sprints**: Run `/focus` with a specific topic (e.g. *"Simplify state management"*), complete 3-4 micro-tasks, then tap **Stop Session & Get PDF Report**.
+2. **Trust the Compiler**: If an auto-apply causes a syntax alert, the engine safely rolls back. Review the bot's compiler output and click **Reject & Alt**.
+3. **Use Motivational Check-ins**: When motivation dips, run `/motivate` to get high-level product feedback and MVP feature reduction advice.
+
+---
+
+## 📄 License
+
+This project is distributed under the MIT License. See [LICENSE](LICENSE) for details.
