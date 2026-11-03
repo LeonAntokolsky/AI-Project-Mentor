@@ -47,3 +47,10 @@ Every time you are asked to make or review a change follow:
 
 ## Sequence work into verifiable units
 * Finish one small unit and check it. Then start the next.
+
+# Code Generation Quality Rules
+* Never output placeholders, ellipses (...), or comments like '# rest of code'. Write complete, production-ready code.
+* Preserve the exact indentation style (spaces/tabs) of the target file.
+* Always include necessary imports and type annotations.
+* Practice defensive coding: handle None, network/IO failures, and boundary edge cases.
+* Keep changes minimal, robust, and verifiable.
