@@ -520,8 +520,9 @@ async def handle_task_actions(callback: CallbackQuery):
         # 2. Apply all patches atomically
         applied_files = []
         for patch in patches_to_apply:
-            target_path = proj_dir / patch["file_path"]
-            if not target_path.exists():
+            clean_rel = patch["file_path"].lstrip("/\\")
+            target_path = (proj_dir / clean_rel).resolve()
+            if not target_path.is_relative_to(proj_dir.resolve()) or not target_path.exists():
                 continue
 
             content = target_path.read_text(encoding="utf-8")
