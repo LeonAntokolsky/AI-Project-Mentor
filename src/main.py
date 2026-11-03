@@ -85,6 +85,8 @@ def get_cute_heart_reply() -> str:
 
 def check_file_syntax(file_path: Path) -> str | None:
     """Validates syntax for supported file types, returning error string if invalid."""
+    if not isinstance(file_path, Path) or not file_path.exists() or not file_path.is_file():
+        return f"File does not exist or is invalid: {file_path}"
     if file_path.suffix == ".py":
         try:
             py_compile.compile(file_path, doraise=True)
@@ -97,8 +99,10 @@ def check_file_syntax(file_path: Path) -> str | None:
             return str(err)
     return None
 
-def clean_patch_text(text: str) -> str:
+def clean_patch_text(text: str | None) -> str:
     """Removes accidental line number prefixes (e.g. '12: ') emitted by LLMs while preserving indentation."""
+    if not text or not isinstance(text, str):
+        return ""
     import re
     cleaned_lines = [
         re.sub(r"^\s*\d+:\s?", "", line)
@@ -106,11 +110,13 @@ def clean_patch_text(text: str) -> str:
     ]
     return "\n".join(cleaned_lines)
 
-def apply_text_patch(content: str, search_block: str, replacement: str) -> str | None:
+def apply_text_patch(content: str | None, search_block: str | None, replacement: str | None) -> str | None:
     """Pure function to safely apply search-and-replace with newline and line-number normalization."""
+    if not content or not isinstance(content, str) or not search_block:
+        return None
     norm_content = content.replace("\r\n", "\n")
     norm_search = clean_patch_text(search_block).strip("\r\n")
-    norm_replace = clean_patch_text(replacement).strip("\r\n")
+    norm_replace = clean_patch_text(replacement or "").strip("\r\n")
 
     if norm_search and norm_search in norm_content:
         return norm_content.replace(norm_search, norm_replace, 1)
