@@ -129,8 +129,10 @@ def generate_session_pdf_report(
 
             story.append(Paragraph(f"<b>{idx}. {title_esc}</b>", h2_style))
 
-            file_stem = Path(t.get('file_path', 'item')).stem
-            unique_commit_esc = html.escape(t.get('git_commit_message') or f"refactor({file_stem}): {t.get('title', '').lower()}")
+            raw_file_path = t.get('file_path') or 'item'
+            file_stem = Path(raw_file_path).stem
+            task_title = (t.get('title') or '').lower()
+            unique_commit_esc = html.escape(t.get('git_commit_message') or f"refactor({file_stem}): {task_title}")
             meta_table_data = [
                 [Paragraph("<b>Target File:</b>", body_style), Paragraph(file_path_esc, body_style)],
                 [Paragraph("<b>Git Commit:</b>", body_style), Paragraph(f"<code>{unique_commit_esc}</code>", body_style)],
