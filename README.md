@@ -128,8 +128,38 @@ docker-compose logs -f mentor-agent
 
 > 💡 **Persistent Data**: SQLite database and generated PDF reports are automatically persisted in the host `./data` directory.
 
-## Usage
-- Send `/start` to the Telegram bot to register.
-- Use `/scan` or `/focus` to analyze your project and find improvements.
+## 🤖 Telegram Bot Interface & Commands
+
+### 🔐 Filesystem Authentication Handshake
+To guarantee that only individuals with access to the host machine can trigger code edits:
+1. Send `/start` to the bot.
+2. When prompted that the bot is locked, retrieve the secret token created on the server:
+   ```bash
+   cat data/.auth_token
+   ```
+3. Reply in Telegram:
+   ```text
+   /auth YOUR_GENERATED_TOKEN
+   ```
+4. Access is granted instantly and saved in the database.
+
+### 🎮 Bot Commands
+| Command | Description |
+| :--- | :--- |
+| `/start` | Welcome guide, system status, and main action keyboard. |
+| `/focus [goal]` | Run a focused codebase scan tailored to a custom goal (e.g. `/focus harden SQL queries`). |
+| `/scan` | Open focus preset menu or run a comprehensive project audit. |
+| `/next` | Receive the highest-priority pending micro-task from the backlog. |
+| `/status` | View completed, pending, skipped task metrics and reminder schedules. |
+| `/settings` | Switch reminder ping interval on the fly (1h, 6h, 12h, 24h, 48h). |
+| `/motivate` | Co-Founder check-in: triggers an MVP rescue plan and 2 pivot ideas if you are stuck. |
+
+### 🕹️ Interactive Task Controls
+When a micro-task arrives in Telegram, the message contains the ROI rationale, estimated minutes, target file, and complete replacement snippet. Choose your action:
+- **🛠 Apply Fix Auto**: Automatically patches target files, validates language syntax, and creates a local Git commit.
+- **✅ Done Manually**: Tells the mentor you implemented the fix manually; the AI inspects the live file to verify completion.
+- **🔄 Reject & Alt**: Rejects the suggested pattern and commands Gemini to devise an alternate solution.
+- **🔍 Verify Fix with AI**: Runs automated verification of current file content against task requirements.
+- **🛑 Stop Session & Get PDF Report**: Finalizes current session and delivers a formatted PDF audit document.
 - Use `/next` to receive and apply micro-tasks.
 - Tap **Commit & Push Changes** to record fixes to your Git history.
