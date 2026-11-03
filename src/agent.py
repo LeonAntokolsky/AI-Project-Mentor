@@ -103,9 +103,8 @@ class MentorAgent:
             f"PRIMARY FILE: {task.get('file_path')}\n"
             f"PREVIOUS EXPLANATION: {task.get('explanation')}\n"
             f"REJECTED FIX SNIPPET:\n{task.get('ready_code_fix')}\n\n"
-            "Propose a completely DIFFERENT, alternative implementation approach to solve the problem.\n"
-            "Keep the file_path, but provide an alternative strategy with exact search_block and ready_code_fix.\n"
-            "Include dependent_patches for any accompanying edits in other files if needed."
+            "CRITICAL: You MUST solve the EXACT SAME core bug/issue described in REJECTED TASK TITLE, "
+            "but using a different code pattern, library, or architectural approach. Do NOT switch to a different bug."
         )
         if project_context:
             prompt += f"\n\nPROJECT CONTEXT:\n{project_context[:40000]}"
@@ -183,4 +182,5 @@ class MentorAgent:
             contents=prompt,
             config=types.GenerateContentConfig(temperature=0.2),
         )
-        return response.text.strip().splitlines()[0]
+        lines = [line.strip() for line in (response.text or "").splitlines() if line.strip()]
+        return lines[0] if lines else "chore: update codebase"
