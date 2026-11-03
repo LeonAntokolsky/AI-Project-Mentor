@@ -105,7 +105,8 @@ class MentorAgent:
             f"PREVIOUS EXPLANATION: {task.get('explanation')}\n"
             f"REJECTED FIX SNIPPET:\n{task.get('ready_code_fix')}\n\n"
             "CRITICAL: You MUST solve the EXACT SAME core bug/issue described in REJECTED TASK TITLE, "
-            "but using a different code pattern, library, or architectural approach. Do NOT switch to a different bug."
+            "but using a different code pattern, library, or architectural approach. Do NOT switch to a different bug.\n"
+            "Provide EXACT verbatim search_block and complete, executable ready_code_fix without line numbers or ellipses."
         )
         if project_context:
             prompt += f"\n\nPROJECT CONTEXT:\n{project_context[:40000]}"
@@ -117,7 +118,7 @@ class MentorAgent:
                 system_instruction=self.skill_instructions,
                 response_mime_type="application/json",
                 response_schema=BacklogTask,
-                temperature=0.4,
+                temperature=0.2,
             ),
         )
         return BacklogTask.model_validate_json(response.text)
