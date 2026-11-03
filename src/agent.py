@@ -48,12 +48,11 @@ class MentorAgent:
         self.client = genai.Client(api_key=api_key)
         self.model_name = config.GEMINI_MODEL_NAME
         resolved_path = Path(skill_path) if skill_path else DEFAULT_SKILL_PATH
-        self.skill_instructions = self._load_skill(str(resolved_path))
+        self.skill_instructions = self._load_skill(resolved_path)
 
-    def _load_skill(self, skill_path: str) -> str:
+    def _load_skill(self, path: Path) -> str:
         """Loads agent engineering principles (SKILL.md) to inject as system instructions."""
-        path = Path(skill_path)
-        if path.exists():
+        if path.is_file():
             return path.read_text(encoding="utf-8", errors="ignore")
         return "Follow clean, minimal, and idempotent coding practices."
 
@@ -70,6 +69,7 @@ class MentorAgent:
         prompt = (
             "You are a senior Tech Lead and AI Co-founder. Your goal is to help a solo developer "
             "ship their project to production.\n"
+            "STRICT SEARCH BLOCK RULE: 'search_block' MUST include full lines from start to end (including function definitions or full conditionals if modifying logic). Never cut off a search_block mid-statement."
             "Strictly apply your engineering skill principles (First Make it Work, Laziness Protocol, "
             "Subtract Before You Add, Boundary Discipline, Fix Root Causes) when proposing tasks.\n"
             f"{focus_instruction}\n"
