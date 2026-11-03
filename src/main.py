@@ -144,6 +144,18 @@ async def send_settings_menu(target: Message | CallbackQuery):
     )
     await send(text, parse_mode="HTML", reply_markup=get_settings_keyboard(hours))
 
+def get_session_complete_keyboard() -> InlineKeyboardMarkup:
+    """Builds quick action buttons after session completion (without 'Next Task')."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📊 Status", callback_data="quick:status"),
+            InlineKeyboardButton(text="🔍 New Focus Scan", callback_data="quick:scan"),
+        ],
+        [
+            InlineKeyboardButton(text="⚙️ Settings", callback_data="quick:settings"),
+            InlineKeyboardButton(text="📦 Commit & Push Changes", callback_data="git:commit_push")
+        ]
+    ])
 
 async def send_session_pdf_report(chat_id: int):
     """Generates PDF report of completed tasks and sends it to the Telegram chat."""
@@ -155,7 +167,7 @@ async def send_session_pdf_report(chat_id: int):
             chat_id,
             "ℹ️ <b>No fixes were applied in this session.</b> PDF report was not created.",
             parse_mode="HTML",
-            reply_markup=get_quick_actions_keyboard()
+            reply_markup=get_session_complete_keyboard()
         )
         return
 
@@ -176,13 +188,12 @@ async def send_session_pdf_report(chat_id: int):
                 f"📁 Saved locally to: <code>{pdf_path}</code>"
             ),
             parse_mode="HTML",
-            reply_markup=get_quick_actions_keyboard()
+            reply_markup=get_session_complete_keyboard()
         )
         await status_msg.delete()
     except Exception as e:
         logging.error(f"Error generating PDF report: {e}")
         await status_msg.edit_text(f"❌ <b>Failed to generate PDF report:</b> {html.escape(str(e))}", parse_mode="HTML")
-
 
 @dp.message(Command("auth"))
 async def cmd_auth(message: Message):
@@ -677,17 +688,7 @@ async def handle_task_actions(callback: CallbackQuery):
             target_path.write_text(new_content, encoding="utf-8")
             applied_files.append(target_path)
 
-            syntax_error = None
-            if target_path.suffix == ".py":
-                try:
-                    py_compile.compile(target_path, doraise=True)
-                except py_compile.PyCompileError as e:
-                    syntax_error = str(e)
-            elif target_path.suffix == ".json":
-                try:
-                    json.loads(target_path.read_text(encoding="utf-8"))
-                except Exception as e:
-                    syntax_error = str(e)
+            syntax_error = check_file_syntax(target_path)
 
             if syntax_error:
                 target_path.write_text(content, encoding="utf-8")
