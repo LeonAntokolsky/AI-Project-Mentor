@@ -96,8 +96,10 @@ class Database:
         """Retrieves the registered Telegram chat_id."""
         return await self._get_state_field("chat_id")
 
-    async def set_user_verified(self):
+    async def set_user_verified(self, chat_id: Optional[int] = None):
         """Marks user as verified for filesystem access."""
+        if chat_id is not None:
+            await self.set_chat_id(chat_id)
         await self._update_state_field("is_verified", 1)
 
     async def get_ping_interval(self, default_hours: int = 24) -> int:
