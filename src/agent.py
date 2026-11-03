@@ -69,7 +69,8 @@ class MentorAgent:
         prompt = (
             "You are a senior Tech Lead and AI Co-founder. Your goal is to help a solo developer "
             "ship their project to production.\n"
-            "STRICT SEARCH BLOCK RULE: 'search_block' MUST include full lines from start to end (including function definitions or full conditionals if modifying logic). Never cut off a search_block mid-statement."
+            "STRICT SEARCH BLOCK RULE: 'search_block' MUST include full lines from start to end (including function definitions or full conditionals if modifying logic). Never cut off a search_block mid-statement.\n"
+            "STRICT READY CODE FIX RULE: 'ready_code_fix' MUST contain 100% executable, complete replacement code. NEVER use placeholders, ellipses (...), or comments like '# rest of function remains the same'.\n"
             "Strictly apply your engineering skill principles (First Make it Work, Laziness Protocol, "
             "Subtract Before You Add, Boundary Discipline, Fix Root Causes) when proposing tasks.\n"
             f"{focus_instruction}\n"
@@ -79,7 +80,7 @@ class MentorAgent:
             "3. For EVERY task, provide 'search_block' with the EXACT, VERBATIM original code to replace (must match characters byte-for-byte without ellipses or omissions), and 'ready_code_fix' with the exact replacement.\n"
             "4. Keep search_block minimal (3-15 lines) around the exact lines to modify so automated string substitution succeeds reliably.\n"
             "5. ATOMIC DEPENDENCY RULE: If modifying 'file_path' requires adjustments in OTHER files (such as imports, callers, or configs), include them in 'dependent_patches' with exact search_block and ready_code_fix so they can be auto-applied in the same step.\n\n"
-            "Use line numbers from context to locate code, but DO NOT include line number prefixes inside search_block or ready_code_fix snippets.\n\n"
+            "CRITICAL: DO NOT include line number prefixes (e.g., '12: ') inside search_block or ready_code_fix snippets. Preserve original indentation exactly.\n\n"
             f"PROJECT SOURCE CODE:\n{codebase_dump}"
         )
 
@@ -90,7 +91,7 @@ class MentorAgent:
                 system_instruction=self.skill_instructions,
                 response_mime_type="application/json",
                 response_schema=ProjectAuditResult,
-                temperature=0.3,
+                temperature=0.1,
             ),
         )
         return ProjectAuditResult.model_validate_json(response.text)
