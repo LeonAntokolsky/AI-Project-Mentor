@@ -125,12 +125,17 @@ class MentorAgent:
 
     def verify_task_fix(self, task: dict, current_file_content: str) -> TaskVerificationResult:
         """Verifies whether the user properly applied the requested fix in the target file."""
+        title = task.get("title") or "Untitled Task"
+        explanation = task.get("explanation") or "No explanation provided."
+        ready_code_fix = task.get("ready_code_fix") or ""
+        file_path = task.get("file_path") or "unknown"
+        safe_content = current_file_content or "<empty file>"
         prompt = (
             "You are verifying whether a developer completed the assigned micro-task.\n\n"
-            f"ASSIGNED TASK TITLE: {task['title']}\n"
-            f"TASK EXPLANATION: {task['explanation']}\n"
-            f"SUGGESTED FIX WAS:\n{task['ready_code_fix']}\n\n"
-            f"CURRENT CONTENT OF FILE '{task['file_path']}':\n{current_file_content}\n\n"
+            f"ASSIGNED TASK TITLE: {title}\n"
+            f"TASK EXPLANATION: {explanation}\n"
+            f"SUGGESTED FIX WAS:\n{ready_code_fix}\n\n"
+            f"CURRENT CONTENT OF FILE '{file_path}':\n{safe_content}\n\n"
             "Evaluate the current file content:\n"
             "- Set is_completed = True if the root problem described in the task is solved (even if the developer's implementation slightly differs from the suggested snippet).\n"
             "- Set is_completed = False if the change has not been applied yet or has a critical flaw.\n"
