@@ -826,14 +826,25 @@ async def handle_git_commit_push(callback: CallbackQuery):
         commit_msg = "\n".join(commit_summaries)
 
         push_res = subprocess.run(
-            ["git", "push"],
+            ["git", "push", "origin", "HEAD"],
             cwd=proj_dir, capture_output=True, text=True, errors="replace"
         )
-        push_status = "and pushed to remote 🚀" if push_res.returncode == 0 else "(push skipped: no remote branch configured)"
+
+        if push_res.returncode == 0:
+            push_status = "and pushed to remote 🚀"
+        else:
+            err_msg = push_res.stderr.strip() or push_res.stdout.strip()
+            if "fetch first" in err_msg or "rejected" in err_msg:
+                push_status = "⚠️ <i>(push rejected: run 'git pull' on host to merge remote changes)</i>"
+            elif "Could not read from remote" in err_msg or "Permission denied" in err_msg:
+                push_status = "⚠️ <i>(push skipped: no SSH keys or Git credentials inside container)</i>"
+            else:
+                push_status = f"⚠️ <i>(push skipped: {html.escape(err_msg[:80])})</i>"
 
         await callback.message.answer(
-            f"✅ <b>Committed successfully {push_status}!</b>\n\n"
-            f"<b>Message:</b> <code>{html.escape(commit_msg)}</code>",
+            f"✅ <b>Committed successfully!</b>\n"
+            f"Status: {push_status}\n\n"
+            f"<b>Message:</b>\n<code>{html.escape(commit_msg)}</code>",
             parse_mode="HTML"
         )
 
