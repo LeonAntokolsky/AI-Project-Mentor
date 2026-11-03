@@ -44,8 +44,8 @@ class TaskVerificationResult(BaseModel):
     feedback: str = Field(description="Short, constructive feedback explaining what is good or what is still missing (2-3 sentences)")
 
 class MentorAgent:
-    def __init__(self, api_key: str, skill_path: str | Path | None = None):
-        self.client = genai.Client(api_key=api_key)
+    def __init__(self, api_key: str | None = None, skill_path: str | Path | None = None):
+        self.client = genai.Client(api_key=api_key or config.GEMINI_API_KEY)
         self.model_name = config.GEMINI_MODEL_NAME
         resolved_path = Path(skill_path) if skill_path else DEFAULT_SKILL_PATH
         self.skill_instructions = self._load_skill(resolved_path)
