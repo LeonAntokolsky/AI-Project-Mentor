@@ -204,8 +204,8 @@ class Database:
         """Updates task status and resets ignored_count when user interacts."""
         async with self._get_db() as db:
             await db.execute("UPDATE tasks SET status = ? WHERE id = ?", (status, task_id))
-            await db.execute("UPDATE project_state SET ignored_count = 0 WHERE id = 1")
             await db.commit()
+        await self.reset_ignored_count()
 
     async def reset_ignored_count(self):
         """Resets ignored counter when user manually interacts with the bot."""
