@@ -27,6 +27,8 @@ SECRET_PATTERNS = [
     re.compile(r'-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----'),
 ]
 
+MAX_FILE_SIZE_BYTES = 500_000
+
 def scrub_secrets(text: str | None) -> str:
     if not text:
         return ""
@@ -42,56 +44,63 @@ def is_scannable_file(path: Path) -> bool:
     return path.suffix.lower() in ALLOWED_EXTENSIONS or name.lower() == "dockerfile"
 
 
-def read_single_file(project_dir: str, rel_file_path: str) -> str:
-    base_path = Path(project_dir).resolve()
-    clean_rel = rel_file_path.lstrip("/\\")
-    target_path = (base_path / clean_rel).resolve()
-    if not target_path.is_relative_to(base_path):
-        raise ValueError("Invalid file path: outside of project directory.")
-    if not target_path.is_file():
-        raise FileNotFoundError(f"File '{rel_file_path}' not found in project.")
-    return scrub_secrets(target_path.read_text(encoding="utf-8", errors="ignore"))
+def read_single_file(base_dir: str, relative_path: str, max_size: int = MAX_FILE_SIZE_BYTES) -> str:
+    """Reads a single file safely with path traversal protection and size limits."""
+    if not base_dir or not base_dir.strip():
+        return ""
+    if not relative_path or not relative_path.strip():
+        return ""
 
-def collect_project_context(project_dir: str, max_chars: int = 300_000) -> str:
-    """Traverses the project directory and packs allowed source files into a single string."""
-    base_path = Path(project_dir)
-    if not base_path.exists():
-        raise FileNotFoundError(f"Target project directory '{project_dir}' does not exist.")
+    root_path = Path(base_dir).resolve()
+    clean_rel = relative_path.lstrip("/\\")
+    target_path = (root_path / clean_rel).resolve()
 
-    collected_parts = []
-    total_chars = 0
+    if not target_path.is_relative_to(root_path):
+        return "[Security Exception: Target path is outside base directory]"
 
-    for root, dirs, files in os.walk(base_path):
-        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith(".")]
+    if not target_path.exists() or not target_path.is_file():
+        return f"[File not found: {clean_rel}]"
 
-        for file in files:
-            file_path = Path(root) / file
-            if not is_scannable_file(file_path):
-                continue
-            if file_path.is_symlink() and not file_path.resolve().is_relative_to(base_path.resolve()):
-                continue
-            if file_path.stat().st_size > 500_000:
-                continue
+    if target_path.stat().st_size > max_size:
+        return f"[File size exceeds maximum limit of {max_size} bytes]"
 
-            rel_path = file_path.relative_to(base_path)
-            try:
-                content = file_path.read_text(encoding="utf-8", errors="ignore")
-                content = scrub_secrets(content)
-                numbered_lines = "\n".join(
-                    f"{i + 1}: {line}" for i, line in enumerate(content.splitlines())
-                )
-                snippet = f"\n=== FILE: {rel_path} ===\n{numbered_lines}\n"
+    try:
+        content = target_path.read_text(encoding="utf-8", errors="replace")
+        return scrub_secrets(content)
+    except Exception as e:
+        return f"[Error reading file: {e}]"
 
-                if total_chars + len(snippet) > max_chars:
-                    collected_parts.append("\n[...Context limit reached, remaining files truncated...]")
-                    return "".join(collected_parts)
+def collect_project_context(base_dir: str, max_size: int = MAX_FILE_SIZE_BYTES) -> str:
+    """Collects and aggregates readable source files from the project directory."""
+    if not base_dir or not base_dir.strip():
+        return ""
 
-                collected_parts.append(snippet)
-                total_chars += len(snippet)
-            except Exception as e:
-                logging.warning(f"Error reading file {rel_path}: {e}")
+    root_path = Path(base_dir).resolve()
+    if not root_path.exists() or not root_path.is_dir():
+        return ""
 
-    if not collected_parts:
-        return "Project directory is empty or contains no supported source files."
+    context_parts = []
 
-    return "".join(collected_parts)
+    for path in root_path.rglob("*"):
+        if not path.is_file():
+            continue
+
+        rel_parts = path.relative_to(root_path).parts
+        if any(part in IGNORE_DIRS or part.startswith(".") for part in rel_parts[:-1]):
+            continue
+
+        if path.name in IGNORE_FILES or path.suffix not in ALLOWED_EXTENSIONS:
+            continue
+
+        if path.stat().st_size > max_size:
+            continue
+
+        try:
+            rel_path_str = str(path.relative_to(root_path))
+            content = path.read_text(encoding="utf-8", errors="replace")
+            clean_content = scrub_secrets(content)
+            context_parts.append(f"--- File: {rel_path_str} ---\n{clean_content}\n")
+        except Exception:
+            continue
+
+    return "\n".join(context_parts)
