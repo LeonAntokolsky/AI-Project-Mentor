@@ -830,7 +830,8 @@ async def handle_git_commit_push(callback: CallbackQuery):
             return
         commit_msg = "\n".join(commit_summaries)
 
-        push_res = subprocess.run(
+        push_res = await asyncio.to_thread(
+            subprocess.run,
             ["git", "push", "origin", "HEAD"],
             cwd=proj_dir, capture_output=True, text=True, errors="replace"
         )
