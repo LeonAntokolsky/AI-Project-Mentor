@@ -61,6 +61,10 @@ def collect_project_context(project_dir: str, max_chars: int = 300_000) -> str:
             file_path = Path(root) / file
             if not is_scannable_file(file_path):
                 continue
+            if file_path.is_symlink() and not file_path.resolve().is_relative_to(base_path.resolve()):
+                continue
+            if file_path.stat().st_size > 500_000:
+                continue
 
             rel_path = file_path.relative_to(base_path)
             try:
