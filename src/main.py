@@ -774,24 +774,32 @@ async def handle_task_actions(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "git:commit_push")
 async def handle_git_commit_push(callback: CallbackQuery):
-    await callback.answer("Checking modified files in Git...")
+    await callback.answer()
+
+    # Отправляем сообщение-индикатор ожидания
+    status_msg = await callback.message.reply(
+        "⏳ <b>Анализирую изменения и обновляю Git...</b>\n"
+        "<i>Пожалуйста, подождите. ИИ генерирует коммиты и отправляет их в репозиторий...</i>",
+        parse_mode="HTML"
+    )
+
     proj_dir = config.CONTAINER_PROJECT_PATH
 
     try:
+        # 1. Безопасность и настройки Git
         subprocess.run(["git", "config", "--global", "--add", "safe.directory", proj_dir], check=False)
-        has_user = subprocess.run(["git", "config", "user.name"], cwd=proj_dir, capture_output=True, text=True)
-        if not has_user.stdout.strip():
-            subprocess.run(["git", "config", "user.name", "AI Project Mentor"], cwd=proj_dir, check=False)
-            subprocess.run(["git", "config", "user.email", "mentor@local"], cwd=proj_dir, check=False)
 
+        # Гарантируем наличие файла .gitkeep в папке data/
         data_dir = Path(proj_dir) / "data"
         if data_dir.exists():
             gitkeep = data_dir / ".gitkeep"
             if not gitkeep.exists():
                 gitkeep.touch()
 
+        # 2. Добавляем изменения в индекс
         subprocess.run(["git", "add", "-A"], cwd=proj_dir, check=False)
 
+        # 3. Безопасная проверка заиндексированных изменений
         staged_proc = subprocess.run(
             ["git", "diff", "--cached", "HEAD"],
             cwd=proj_dir, capture_output=True, text=True, errors="replace"
@@ -806,12 +814,14 @@ async def handle_git_commit_push(callback: CallbackQuery):
             staged_diff = staged_proc_all.stdout.strip()
 
         if not staged_diff:
-            await callback.message.answer("ℹ️ <b>Working tree clean:</b> No new changes to commit.", parse_mode="HTML")
+            await status_msg.edit_text("ℹ️ <b>Working tree clean:</b> Нет новых изменений для коммита.", parse_mode="HTML")
             return
 
+        # 4. Пофайловая генерация сообщений коммитов через ИИ
         subprocess.run(["git", "reset"], cwd=proj_dir, check=False)
         status_proc = subprocess.run(["git", "status", "--porcelain"], cwd=proj_dir, capture_output=True, text=True)
         changed_entries = [line.strip().split(maxsplit=1)[-1] for line in status_proc.stdout.splitlines() if line.strip()]
+
         commit_summaries = []
         for file_rel in changed_entries:
             clean_file = file_rel.strip('"\'')
@@ -820,16 +830,20 @@ async def handle_git_commit_push(callback: CallbackQuery):
             if not file_diff:
                 f_obj = Path(proj_dir) / clean_file
                 file_diff = f_obj.read_text(encoding="utf-8", errors="ignore")[:3000] if f_obj.is_file() else "new file"
+
             file_msg = await asyncio.to_thread(agent.generate_file_commit_message, clean_file, file_diff)
             subprocess.run(["git", "add", clean_file], cwd=proj_dir, check=False)
             commit_res = subprocess.run(["git", "commit", "-m", file_msg], cwd=proj_dir, capture_output=True, text=True)
             if commit_res.returncode == 0:
                 commit_summaries.append(f"• {clean_file}: {file_msg}")
+
         if not commit_summaries:
-            await callback.message.answer("ℹ️ <b>Git:</b> No files were committed.", parse_mode="HTML")
+            await status_msg.edit_text("ℹ️ <b>Git:</b> Изменения не были закоммичены.", parse_mode="HTML")
             return
+
         commit_msg = "\n".join(commit_summaries)
 
+        # 5. Выполнение push в отдельном потоке
         push_res = await asyncio.to_thread(
             subprocess.run,
             ["git", "push", "origin", "HEAD"],
@@ -847,7 +861,8 @@ async def handle_git_commit_push(callback: CallbackQuery):
             else:
                 push_status = f"⚠️ <i>(push skipped: {html.escape(err_msg[:80])})</i>"
 
-        await callback.message.answer(
+        # 6. Обновляем статусное сообщение результатами
+        await status_msg.edit_text(
             f"✅ <b>Committed successfully!</b>\n"
             f"Status: {push_status}\n\n"
             f"<b>Message:</b>\n<code>{html.escape(commit_msg)}</code>",
@@ -856,7 +871,7 @@ async def handle_git_commit_push(callback: CallbackQuery):
 
     except Exception as e:
         logging.error(f"Git commit/push error: {e}")
-        await callback.message.answer(f"❌ <b>Git Error:</b> {html.escape(str(e))}", parse_mode="HTML")
+        await status_msg.edit_text(f"❌ <b>Git Error:</b> {html.escape(str(e))}", parse_mode="HTML")
 
 # Fallback handler AT THE VERY BOTTOM so the user NEVER gets silence
 @dp.message(Command("focus"))
