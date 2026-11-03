@@ -27,7 +27,9 @@ SECRET_PATTERNS = [
     re.compile(r'-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----'),
 ]
 
-def scrub_secrets(text: str) -> str:
+def scrub_secrets(text: str | None) -> str:
+    if not text:
+        return ""
     for pattern in SECRET_PATTERNS:
         text = pattern.sub('<REDACTED_SECRET>', text)
     return text
