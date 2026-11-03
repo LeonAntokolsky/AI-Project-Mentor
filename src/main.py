@@ -702,37 +702,20 @@ async def handle_task_actions(callback: CallbackQuery):
             s_block = patch["search_block"]
             r_fix = patch["ready_code_fix"]
 
-            normalized_content = content.replace("\r\n", "\n")
-            norm_s_block = s_block.replace("\r\n", "\n")
-            norm_r_fix = r_fix.replace("\r\n", "\n")
-
-            match_block = norm_s_block if norm_s_block and norm_s_block in normalized_content else (
-                norm_s_block.strip() if norm_s_block and norm_s_block.strip() in normalized_content else ""
-            )
-            if not match_block:
+            patched_content = apply_text_patch(content, s_block, r_fix)
+            if patched_content is None:
                 continue
 
-            match_fix = norm_r_fix if match_block == norm_s_block else norm_r_fix.strip()
-            new_content = normalized_content.replace(match_block, match_fix, 1)
-            target_path.write_text(new_content, encoding="utf-8")
-            applied_files.append(target_path)
+            # Save original snapshot for atomic rollback
+            target_path.write_text(patched_content, encoding="utf-8")
+            applied_files.append((target_path, content))
 
-            syntax_error = None
-            if target_path.suffix == ".py":
-                try:
-                    py_compile.compile(target_path, doraise=True)
-                except py_compile.PyCompileError as e:
-                    syntax_error = str(e)
-            elif target_path.suffix == ".json":
-                try:
-                    json.loads(target_path.read_text(encoding="utf-8"))
-                except Exception as e:
-                    syntax_error = str(e)
-
+            syntax_error = check_file_syntax(target_path)
             if syntax_error:
-                target_path.write_text(content, encoding="utf-8")
+                for path_to_revert, orig_body in applied_files:
+                    path_to_revert.write_text(orig_body, encoding="utf-8")
                 await callback.message.answer(
-                    f"❌ <b>Syntax Error in {html.escape(patch['file_path'])}! Rollback applied.</b>\n"
+                    f"❌ <b>Syntax Error in {html.escape(patch['file_path'])}! All changes rolled back.</b>\n"
                     f"<pre><code>{html.escape(syntax_error)}</code></pre>",
                     parse_mode="HTML"
                 )
