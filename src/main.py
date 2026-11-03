@@ -782,12 +782,23 @@ async def handle_git_commit_push(callback: CallbackQuery):
         # Allow git to operate inside the mounted directory
         subprocess.run(["git", "config", "--global", "--add", "safe.directory", proj_dir], check=False)
 
-        # Get diff only for modified tracked files
+        is_repo = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=proj_dir, capture_output=True, text=True)
+        if is_repo.returncode != 0:
+            await callback.message.answer("⚠️ Target directory is not a Git repository. Run <code>git init</code> first.", parse_mode="HTML")
+            return
+
         diff_proc = subprocess.run(["git", "diff", "HEAD"], cwd=proj_dir, capture_output=True, text=True)
-        diff_text = diff_proc.stdout.strip()
+        diff_text = diff_proc.stdout.strip() if diff_proc.returncode == 0 else ""
+        if not diff_text:
+            unstaged_diff = subprocess.run(["git", "diff"], cwd=proj_dir, capture_output=True, text=True)
+            diff_text = unstaged_diff.stdout.strip()
 
         if not diff_text:
-            await callback.message.answer("ℹ️ No modified tracked files to commit (`git diff` is empty).")
+            status_proc = subprocess.run(["git", "status", "--porcelain"], cwd=proj_dir, capture_output=True, text=True)
+            diff_text = status_proc.stdout.strip()
+
+        if not diff_text:
+            await callback.message.answer("ℹ️ No modified files to commit (working tree is clean).")
             return
 
         status_msg = await callback.message.answer("🧠 Generating commit message from changes and updating Git...")
