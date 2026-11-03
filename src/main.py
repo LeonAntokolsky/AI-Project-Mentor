@@ -96,20 +96,30 @@ def check_file_syntax(file_path: Path) -> str | None:
             return str(err)
     return None
 
+def clean_patch_text(text: str) -> str:
+    """Removes accidental line number prefixes (e.g. '12: ') emitted by LLMs while preserving indentation."""
+    import re
+    cleaned_lines = [
+        re.sub(r"^\s*\d+:\s?", "", line)
+        for line in text.replace("\r\n", "\n").split("\n")
+    ]
+    return "\n".join(cleaned_lines)
+
 def apply_text_patch(content: str, search_block: str, replacement: str) -> str | None:
-    """Pure function to safely apply search-and-replace with newline normalization."""
+    """Pure function to safely apply search-and-replace with newline and line-number normalization."""
     norm_content = content.replace("\r\n", "\n")
-    norm_search = search_block.replace("\r\n", "\n")
-    norm_replace = replacement.replace("\r\n", "\n")
+    norm_search = clean_patch_text(search_block).strip("\r\n")
+    norm_replace = clean_patch_text(replacement).strip("\r\n")
 
-    target_match = norm_search if norm_search and norm_search in norm_content else (
-        norm_search.strip() if norm_search and norm_search.strip() in norm_content else None
-    )
-    if not target_match:
-        return None
+    if norm_search and norm_search in norm_content:
+        return norm_content.replace(norm_search, norm_replace, 1)
 
-    actual_fix = norm_replace if target_match == norm_search else norm_replace.strip()
-    return norm_content.replace(target_match, actual_fix, 1)
+    # Fallback to trimmed search block if trailing blank lines differ
+    trimmed_search = norm_search.strip()
+    if trimmed_search and trimmed_search in norm_content:
+        return norm_content.replace(trimmed_search, norm_replace.strip(), 1)
+
+    return None
 
 def format_status_message(stats: dict) -> str:
     return (
