@@ -1,7 +1,8 @@
+import json
 from contextlib import asynccontextmanager
 from typing import Optional
 import aiosqlite
-from agent import ProjectAuditResult
+from agent import BacklogTask, ProjectAuditResult
 
 
 class Database:
@@ -56,6 +57,10 @@ class Database:
                 pass
             try:
                 await db.execute("ALTER TABLE tasks ADD COLUMN search_block TEXT DEFAULT ''")
+            except Exception:
+                pass
+            try:
+                await db.execute("ALTER TABLE tasks ADD COLUMN dependent_patches TEXT DEFAULT '[]'")
             except Exception:
                 pass
             await db.commit()
@@ -114,37 +119,60 @@ class Database:
                     t.file_path,
                     t.title,
                     t.explanation,
-                    t.search_block,
                     t.expected_profit,
+                    t.search_block,
                     t.ready_code_fix,
                     t.estimated_minutes,
+                    json.dumps([p.model_dump() for p in getattr(t, 'dependent_patches', [])]),
                 )
                 for t in audit.tasks
             ]
             await db.executemany("""
-                            INSERT INTO tasks (
-                                category, file_path, title, explanation,
-                                expected_profit, search_block, ready_code_fix, estimated_minutes
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                        """, records)
+                INSERT INTO tasks (
+                    category, file_path, title, explanation,
+                    expected_profit, search_block, ready_code_fix,
+                    estimated_minutes, dependent_patches
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, records)
             await db.commit()
+
+    async def replace_with_alternative_task(self, task_id: int, alt: BacklogTask) -> int:
+        """Marks old task as skipped and inserts alternative task as pending at the top of the backlog."""
+        async with self._get_db() as db:
+            await db.execute("UPDATE tasks SET status = 'skipped' WHERE id = ?", (task_id,))
+            patches_json = json.dumps([p.model_dump() for p in getattr(alt, 'dependent_patches', [])])
+            cursor = await db.execute("""
+                INSERT INTO tasks (
+                    category, file_path, title, explanation,
+                    expected_profit, search_block, ready_code_fix,
+                    estimated_minutes, dependent_patches, status
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+            """, (
+                alt.category, alt.file_path, alt.title, alt.explanation,
+                alt.expected_profit, alt.search_block, alt.ready_code_fix,
+                alt.estimated_minutes, patches_json
+            ))
+            await db.commit()
+            return cursor.lastrowid
+
+    async def _fetch_task(self, query: str, params: tuple = ()) -> Optional[dict]:
+        """Executes a task lookup query and returns a dictionary representation."""
+        async with self._get_db() as db:
+            cursor = await db.execute(query, params)
+            row = await cursor.fetchone()
+            return dict(row) if row else None
 
     async def get_next_task(self) -> Optional[dict]:
         """Fetches the next pending micro-task from the backlog."""
-        async with self._get_db() as db:
-            cursor = await db.execute(
-                "SELECT * FROM tasks WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
-            )
-            row = await cursor.fetchone()
-            return dict(row) if row else None
+        return await self._fetch_task(
+            "SELECT * FROM tasks WHERE status = 'pending' ORDER BY id ASC LIMIT 1"
+        )
 
     async def get_task_by_id(self, task_id: int) -> Optional[dict]:
         """Fetches a specific task by its ID for verification."""
-        async with self._get_db() as db:
-            cursor = await db.execute("SELECT * FROM tasks WHERE id = ?", (task_id,))
-            row = await cursor.fetchone()
-            return dict(row) if row else None
+        return await self._fetch_task("SELECT * FROM tasks WHERE id = ?", (task_id,))
 
     async def update_task_status(self, task_id: int, status: str):
         """Updates task status and resets ignored_count when user interacts."""
