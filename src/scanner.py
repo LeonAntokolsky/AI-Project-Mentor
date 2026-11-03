@@ -6,10 +6,12 @@ from pathlib import Path
 
 IGNORE_DIRS = {
     ".git", ".venv", "venv", "env", "node_modules", "__pycache__",
-    ".idea", ".vscode", "dist", "build", "migrations", "coverage"
+    ".idea", ".vscode", "dist", "build", "migrations", "coverage",
+    ".pytest_cache", ".mypy_cache", ".ruff_cache"
 }
 IGNORE_FILES = {
-    ".env", ".env.local", ".env.production", "package-lock.json",
+    ".env", ".env.local", ".env.production", ".auth_token", "mentor.db",
+    "mentor.db-wal", "mentor.db-shm", "package-lock.json",
     "poetry.lock", "yarn.lock", "pnpm-lock.yaml"
 }
 ALLOWED_EXTENSIONS = {
@@ -20,6 +22,9 @@ ALLOWED_EXTENSIONS = {
 SECRET_PATTERNS = [
     re.compile(r'(?i)(api[_-]?key|secret|token|password|auth)\s*[:=]\s*["\']?[a-zA-Z0-9_\-\.:/+=]{12,}["\']?'),
     re.compile(r'\b\d{8,10}:[a-zA-Z0-9_-]{35}\b'),
+    re.compile(r'ghp_[a-zA-Z0-9]{36}'),
+    re.compile(r'github_pat_[a-zA-Z0-9_]{82}'),
+    re.compile(r'-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----'),
 ]
 
 def scrub_secrets(text: str) -> str:
