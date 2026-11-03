@@ -734,6 +734,11 @@ async def handle_task_actions(callback: CallbackQuery):
 
         if applied_files:
             try:
+                subprocess.run(["git", "config", "--global", "--add", "safe.directory", str(proj_dir)], check=False)
+                has_user = subprocess.run(["git", "config", "user.name"], cwd=proj_dir, capture_output=True, text=True)
+                if not has_user.stdout.strip():
+                    subprocess.run(["git", "config", "user.name", "AI Project Mentor"], cwd=proj_dir, check=False)
+                    subprocess.run(["git", "config", "user.email", "mentor@local"], cwd=proj_dir, check=False)
                 for f in applied_files:
                     subprocess.run(["git", "add", str(f)], cwd=proj_dir, check=False)
                 commit_msg = f"refactor: {task['title'].lower()}"
