@@ -1,9 +1,9 @@
 import json
+import aiosqlite
 from contextlib import asynccontextmanager
 from typing import Optional
-import aiosqlite
 from agent import BacklogTask, ProjectAuditResult
-
+from datetime import datetime
 
 class Database:
     def __init__(self, db_path: str):
@@ -49,18 +49,18 @@ class Database:
                     status TEXT DEFAULT 'pending'
                 )
             """)
-            try:
-                await db.execute("ALTER TABLE tasks ADD COLUMN expected_profit TEXT DEFAULT ''")
-            except Exception:
-                pass
-            try:
-                await db.execute("ALTER TABLE tasks ADD COLUMN search_block TEXT DEFAULT ''")
-            except Exception:
-                pass
-            try:
-                await db.execute("ALTER TABLE tasks ADD COLUMN dependent_patches TEXT DEFAULT '[]'")
-            except Exception:
-                pass
+            migrations = [
+                ("tasks", "session_id TEXT DEFAULT ''"),
+                ("project_state", "current_session_id TEXT DEFAULT ''"),
+                ("tasks", "expected_profit TEXT DEFAULT ''"),
+                ("tasks", "search_block TEXT DEFAULT ''"),
+                ("tasks", "dependent_patches TEXT DEFAULT '[]'"),
+            ]
+            for table, col in migrations:
+                try:
+                    await db.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
+                except Exception:
+                    pass
             await db.commit()
 
     async def set_chat_id(self, chat_id: int):
@@ -98,11 +98,15 @@ class Database:
             return row[0] if row and row[0] else default_hours
 
     async def get_completed_tasks(self) -> list[dict]:
-        """Fetches all completed tasks to include in the session PDF report."""
+        """Fetches completed tasks belonging strictly to the active session."""
         async with self._get_db() as db:
-            cursor = await db.execute(
-                "SELECT * FROM tasks WHERE status = 'completed' ORDER BY id ASC"
-            )
+            cursor = await db.execute("""
+                SELECT t.* FROM tasks t
+                JOIN project_state p ON p.id = 1
+                WHERE t.status = 'completed'
+                  AND (t.session_id = p.current_session_id OR p.current_session_id = '')
+                ORDER BY t.id ASC
+            """)
             rows = await cursor.fetchall()
             return [dict(row) for row in rows]
 
@@ -114,16 +118,19 @@ class Database:
             return row[0] if row and row[0] else "General Code Refactoring"
 
     async def save_audit_result(self, audit: ProjectAuditResult, focus_direction: str = ""):
-        """Saves project summary, active focus direction, and populates pending tasks with ROI."""
+        """Saves project summary, active focus direction, populates tasks, and initializes session_id."""
+        session_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+
         async with self._get_db() as db:
             await db.execute("""
-                INSERT INTO project_state (id, summary, ignored_count, current_focus)
-                VALUES (1, ?, 0, ?)
+                INSERT INTO project_state (id, summary, ignored_count, current_focus, current_session_id)
+                VALUES (1, ?, 0, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     summary = excluded.summary,
                     ignored_count = 0,
-                    current_focus = excluded.current_focus
-            """, (audit.project_summary, focus_direction))
+                    current_focus = excluded.current_focus,
+                    current_session_id = excluded.current_session_id
+            """, (audit.project_summary, focus_direction, session_id))
 
             await db.execute("DELETE FROM tasks WHERE status = 'pending'")
 
@@ -138,6 +145,7 @@ class Database:
                     t.ready_code_fix,
                     t.estimated_minutes,
                     json.dumps([p.model_dump() for p in getattr(t, 'dependent_patches', [])]),
+                    session_id,
                 )
                 for t in audit.tasks
             ]
@@ -145,28 +153,32 @@ class Database:
                 INSERT INTO tasks (
                     category, file_path, title, explanation,
                     expected_profit, search_block, ready_code_fix,
-                    estimated_minutes, dependent_patches
+                    estimated_minutes, dependent_patches, session_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, records)
             await db.commit()
 
     async def replace_with_alternative_task(self, task_id: int, alt: BacklogTask) -> int:
-        """Marks old task as skipped and inserts alternative task as pending at the top of the backlog."""
+        """Marks old task as skipped and inserts alternative task with the active session_id."""
         async with self._get_db() as db:
+            cursor = await db.execute("SELECT current_session_id FROM project_state WHERE id = 1")
+            row = await cursor.fetchone()
+            session_id = row[0] if row and row[0] else ""
+
             await db.execute("UPDATE tasks SET status = 'skipped' WHERE id = ?", (task_id,))
             patches_json = json.dumps([p.model_dump() for p in getattr(alt, 'dependent_patches', [])])
             cursor = await db.execute("""
                 INSERT INTO tasks (
                     category, file_path, title, explanation,
                     expected_profit, search_block, ready_code_fix,
-                    estimated_minutes, dependent_patches, status
+                    estimated_minutes, dependent_patches, status, session_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
             """, (
                 alt.category, alt.file_path, alt.title, alt.explanation,
                 alt.expected_profit, alt.search_block, alt.ready_code_fix,
-                alt.estimated_minutes, patches_json
+                alt.estimated_minutes, patches_json, session_id
             ))
             await db.commit()
             return cursor.lastrowid
