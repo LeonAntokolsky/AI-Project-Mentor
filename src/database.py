@@ -100,6 +100,15 @@ class Database:
         """Marks user as verified for filesystem access."""
         await self._update_state_field("is_verified", 1)
 
+    async def get_ping_interval(self, default_hours: int = 24) -> int:
+        """Retrieves the current reminder interval in hours."""
+        async with self._get_db() as db:
+            cursor = await db.execute("SELECT ping_interval_hours FROM project_state WHERE id = 1")
+            row = await cursor.fetchone()
+            if row and row[0] is not None and int(row[0]) > 0:
+                return int(row[0])
+            return default_hours
+
     async def set_ping_interval(self, interval_hours: int):
         """Sets or updates the ping interval in hours (clamped between 1 and 168 hours)."""
         clamped_hours = max(1, min(168, interval_hours))
