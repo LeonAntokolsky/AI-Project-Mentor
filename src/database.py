@@ -26,15 +26,12 @@ class Database:
                     chat_id INTEGER,
                     summary TEXT,
                     ignored_count INTEGER DEFAULT 0,
-                    ping_interval_hours INTEGER DEFAULT {default_interval}
+                    ping_interval_hours INTEGER DEFAULT {default_interval},
+                    is_verified INTEGER DEFAULT 0,
+                    current_focus TEXT DEFAULT ''
                 )
             """)
-            for col_def in [
-                "chat_id INTEGER",
-                f"ping_interval_hours INTEGER DEFAULT {default_interval}",
-                "is_verified INTEGER DEFAULT 0",
-                "current_focus TEXT DEFAULT ''"
-            ]:
+            for col_def in ["is_verified INTEGER DEFAULT 0", "current_focus TEXT DEFAULT ' '"]:
                 try:
                     await db.execute(f"ALTER TABLE project_state ADD COLUMN {col_def}")
                 except Exception:
@@ -99,6 +96,22 @@ class Database:
             cursor = await db.execute("SELECT ping_interval_hours FROM project_state WHERE id = 1")
             row = await cursor.fetchone()
             return row[0] if row and row[0] else default_hours
+
+    async def get_completed_tasks(self) -> list[dict]:
+        """Fetches all completed tasks to include in the session PDF report."""
+        async with self._get_db() as db:
+            cursor = await db.execute(
+                "SELECT * FROM tasks WHERE status = 'completed' ORDER BY id ASC"
+            )
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]
+
+    async def get_current_focus(self) -> str:
+        """Retrieves the active session focus direction."""
+        async with self._get_db() as db:
+            cursor = await db.execute("SELECT current_focus FROM project_state WHERE id = 1")
+            row = await cursor.fetchone()
+            return row[0] if row and row[0] else "General Code Refactoring"
 
     async def save_audit_result(self, audit: ProjectAuditResult, focus_direction: str = ""):
         """Saves project summary, active focus direction, and populates pending tasks with ROI."""
