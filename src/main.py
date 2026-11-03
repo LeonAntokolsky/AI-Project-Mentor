@@ -533,9 +533,36 @@ async def handle_task_actions(callback: CallbackQuery):
             norm_s_block = s_block.replace("\r\n", "\n")
             norm_r_fix = r_fix.replace("\r\n", "\n")
 
-            if norm_s_block and norm_s_block in normalized_content:
-                new_content = normalized_content.replace(norm_s_block, norm_r_fix, 1)
-                target_path.write_text(new_content, encoding="utf-8")
+            match_block = norm_s_block if norm_s_block and norm_s_block in normalized_content else (
+                norm_s_block.strip() if norm_s_block and norm_s_block.strip() in normalized_content else ""
+            )
+            if not match_block:
+                continue
+
+            match_fix = norm_r_fix if match_block == norm_s_block else norm_r_fix.strip()
+            target_path.write_text(normalized_content.replace(match_block, match_fix, 1), encoding="utf-8")
+            applied_files.append(target_path)
+
+            syntax_error = None
+            if target_path.suffix == ".py":
+                try:
+                    py_compile.compile(target_path, doraise=True)
+                except py_compile.PyCompileError as e:
+                    syntax_error = str(e)
+            elif target_path.suffix == ".json":
+                try:
+                    json.loads(target_path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    syntax_error = str(e)
+
+            if syntax_error:
+                target_path.write_text(content, encoding="utf-8")
+                await callback.message.answer(
+                    f"❌ <b>Syntax Error in {html.escape(patch['file_path'])}! Rollback applied.</b>\n"
+                    f"<pre><code>{html.escape(syntax_error)}</code></pre>",
+                    parse_mode="HTML"
+                )
+                return"utf-8")
                 applied_files.append(target_path)
             elif norm_s_block and norm_s_block.strip() in normalized_content:
                 new_content = normalized_content.replace(norm_s_block.strip(), norm_r_fix.strip(), 1)
