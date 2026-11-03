@@ -69,6 +69,7 @@ def is_authorized(user_id: int) -> bool:
 
 def get_or_create_fs_token() -> str:
     if not AUTH_TOKEN_FILE.exists():
+        AUTH_TOKEN_FILE.parent.mkdir(parents=True, exist_ok=True)
         AUTH_TOKEN_FILE.write_text(secrets.token_hex(8), encoding="utf-8")
     return AUTH_TOKEN_FILE.read_text(encoding="utf-8").strip()
 
@@ -124,7 +125,7 @@ def apply_text_patch(content: str | None, search_block: str | None, replacement:
     # Fallback to trimmed search block if trailing blank lines differ
     trimmed_search = norm_search.strip()
     if trimmed_search and trimmed_search in norm_content:
-        return norm_content.replace(trimmed_search, norm_replace.strip(), 1)
+        return norm_content.replace(trimmed_search, norm_replace, 1)
 
     return None
 
@@ -758,7 +759,7 @@ async def handle_task_actions(callback: CallbackQuery):
         status_msg = await callback.message.answer("🧠 Generating an alternative strategy...")
 
         try:
-            code_dump = collect_project_context(config.CONTAINER_PROJECT_PATH)
+            code_dump = await asyncio.to_thread(collect_project_context, config.CONTAINER_PROJECT_PATH)
             alt_task = await asyncio.to_thread(agent.generate_alternative_task, task, code_dump)
             await db.replace_with_alternative_task(task_id, alt_task)
 
@@ -778,6 +779,10 @@ async def handle_git_commit_push(callback: CallbackQuery):
 
     try:
         subprocess.run(["git", "config", "--global", "--add", "safe.directory", proj_dir], check=False)
+        has_user = subprocess.run(["git", "config", "user.name"], cwd=proj_dir, capture_output=True, text=True)
+        if not has_user.stdout.strip():
+            subprocess.run(["git", "config", "user.name", "AI Project Mentor"], cwd=proj_dir, check=False)
+            subprocess.run(["git", "config", "user.email", "mentor@local"], cwd=proj_dir, check=False)
 
         data_dir = Path(proj_dir) / "data"
         if data_dir.exists():
