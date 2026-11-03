@@ -82,7 +82,7 @@ def collect_project_context(project_dir: str, max_chars: int = 300_000) -> str:
                 collected_parts.append(snippet)
                 total_chars += len(snippet)
             except Exception as e:
-                print(f"Error reading file {rel_path}: {e}")
+                logging.warning(f"Error reading file {rel_path}: {e}")
 
     if not collected_parts:
         return "Project directory is empty or contains no supported source files."
