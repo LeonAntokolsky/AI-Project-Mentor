@@ -54,6 +54,9 @@ FOCUS_PRESETS = {
     "perf": "Performance optimization, async efficiency, I/O reduction, and faster DB queries",
     "clean": "Strict UB-Mode refactoring: remove duplication, simplify state, and improve readability",
     "ux": "User experience, better error messages, interactive Telegram UI, and edge-case handling",
+    "tests": "Adding unit tests, edge-case coverage, and safety assertions",
+    "architecture": "Architectural refactoring, modularization, and decoupling logic",
+    "full": "Full comprehensive audit covering security, performance, clean code, and bug fixes",
 }
 
 def is_authorized(user_id: int) -> bool:
@@ -86,15 +89,20 @@ def format_status_message(stats: dict) -> str:
         f"⏰ <b>Ping interval:</b> every {stats['ping_interval_hours']}h"
     )
 
+def resolve_target_channel(target: Message | CallbackQuery):
+    """Resolves (chat_id, send_func) uniformly from Message or CallbackQuery."""
+    if isinstance(target, Message):
+        return target.chat.id, target.answer
+    return target.message.chat.id, target.message.answer
+
 async def send_status_view(target: Message | CallbackQuery):
     stats = await db.get_stats()
-    text = format_status_message(stats)
-    send = target.answer if isinstance(target, Message) else target.message.answer
-    await send(text, parse_mode="HTML", reply_markup=get_quick_actions_keyboard())
+    _, send = resolve_target_channel(target)
+    await send(format_status_message(stats), parse_mode="HTML", reply_markup=get_quick_actions_keyboard())
 
 async def send_settings_menu(target: Message | CallbackQuery):
     """Sends the schedule settings menu for both command and quick action button callbacks."""
-    chat_id = target.chat.id if isinstance(target, Message) else target.message.chat.id
+    chat_id, send = resolve_target_channel(target)
     await db.set_chat_id(chat_id)
     hours = await db.get_ping_interval(config.PING_INTERVAL_HOURS)
     text = (
@@ -102,7 +110,6 @@ async def send_settings_menu(target: Message | CallbackQuery):
         f"Current interval: <b>every {hours} hours</b>.\n"
         f"Select a new interval below:"
     )
-    send = target.answer if isinstance(target, Message) else target.message.answer
     await send(text, parse_mode="HTML", reply_markup=get_settings_keyboard(hours))
 
 @dp.message(Command("auth"))
@@ -154,12 +161,9 @@ async def setup_bot_commands(bot_instance: Bot):
     await bot_instance.set_my_commands(commands)
 
 def get_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
-    """Builds interactive buttons for a specific task."""
+    """Builds interactive buttons for a newly received task."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🛠 Apply Fix Auto", callback_data=f"task:apply:{task_id}"),
-            InlineKeyboardButton(text="🔍 Verify Fix", callback_data=f"task:verify:{task_id}")
-        ],
+        [InlineKeyboardButton(text="🛠 Apply Fix Auto", callback_data=f"task:apply:{task_id}")],
         [
             InlineKeyboardButton(text="✅ Done Manually", callback_data=f"task:done:{task_id}"),
             InlineKeyboardButton(text="🔄 Reject & Alt", callback_data=f"task:reject:{task_id}")
@@ -190,8 +194,15 @@ def get_focus_presets_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⚡ Performance", callback_data="focus_preset:perf"),
         ],
         [
-            InlineKeyboardButton(text="🧹 Clean Code (UB-Mode)", callback_data="focus_preset:clean"),
+            InlineKeyboardButton(text="🧹 Clean Code (UB)", callback_data="focus_preset:clean"),
             InlineKeyboardButton(text="✨ UX & Reliability", callback_data="focus_preset:ux"),
+        ],
+        [
+            InlineKeyboardButton(text="🧪 Tests & Edge-Cases", callback_data="focus_preset:tests"),
+            InlineKeyboardButton(text="🏗 Architecture", callback_data="focus_preset:architecture"),
+        ],
+        [
+            InlineKeyboardButton(text="🎯 Full Comprehensive Audit", callback_data="focus_preset:full"),
         ]
     ])
 
@@ -416,7 +427,7 @@ async def handle_set_interval(callback: CallbackQuery):
 
 @dp.message(Command("scan"))
 async def cmd_scan(message: Message):
-    await run_codebase_scan(message.chat.id)
+    await cmd_focus(message)
 
 @dp.message(Command("next"))
 async def cmd_next(message: Message):
@@ -457,7 +468,6 @@ async def cmd_motivate(message: Message):
 
 @dp.callback_query(F.data.startswith("quick:"))
 async def handle_quick_actions(callback: CallbackQuery):
-    """Handles quick action buttons so the user can navigate without typing commands."""
     action = callback.data.split(":")[1]
     chat_id = callback.message.chat.id
     await db.set_chat_id(chat_id)
@@ -474,7 +484,12 @@ async def handle_quick_actions(callback: CallbackQuery):
             reply_markup=get_quick_actions_keyboard()
         )
     elif action == "scan":
-        await run_codebase_scan(chat_id)
+        await callback.message.answer(
+            "🧭 <b>Focused Codebase Audit</b>\n\n"
+            "Choose a focus preset below, or simply <b>type any custom goal in the chat</b>:",
+            parse_mode="HTML",
+            reply_markup=get_focus_presets_keyboard()
+        )
     elif action == "settings":
         await send_settings_menu(callback)
 
@@ -495,21 +510,72 @@ async def handle_task_actions(callback: CallbackQuery):
     if action == "done":
         await db.update_task_status(task_id, "completed")
         await callback.message.edit_reply_markup(reply_markup=None)
-        await callback.answer("Marked as done manually!")
-        await send_task_to_user(chat_id)
+        await callback.answer("Marked as done!")
+
+        kb_post_done = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔍 Verify Fix with AI", callback_data=f"task:verify:{task_id}")],
+            [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")]
+        ])
+        await callback.message.answer(
+            f"✅ <b>Task marked as done manually!</b>\n"
+            f"File: <code>{html.escape(task['file_path'])}</code>\n\n"
+            f"If you edited the code yourself, click below to verify syntax & logic with AI:",
+            parse_mode="HTML",
+            reply_markup=kb_post_done
+        )
+
+    elif action == "verify":
+        await callback.answer("🔍 Inspecting code changes...")
+        status_msg = await callback.message.reply(
+            f"🕵️‍♂️ Inspecting <code>{html.escape(task['file_path'])}</code> to verify your fix...",
+            parse_mode="HTML"
+        )
+
+        try:
+            current_code = read_single_file(config.CONTAINER_PROJECT_PATH, task["file_path"])
+            verification = await asyncio.to_thread(agent.verify_task_fix, task, current_code)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Could not read file for verification: {html.escape(str(e))}")
+            return
+
+        feedback_escaped = html.escape(verification.feedback)
+        if verification.is_completed:
+            await db.update_task_status(task_id, "completed")
+            await callback.message.edit_reply_markup(reply_markup=None)
+
+            kb_next = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")]
+            ])
+            await status_msg.edit_text(
+                f"✅ <b>Verification Passed!</b>\n\n{feedback_escaped}\n\n"
+                f"Task verified! Click below to move forward 🚀",
+                parse_mode="HTML",
+                reply_markup=kb_next
+            )
+        else:
+            await db.reset_ignored_count()
+            kb_reverify = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔍 Verify Fix Again", callback_data=f"task:verify:{task_id}")],
+                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")]
+            ])
+            await status_msg.edit_text(
+                f"⚠️ <b>Not quite ready yet!</b>\n\n{feedback_escaped}\n\n"
+                f"<i>Fix the file and click below to re-verify:</i>",
+                parse_mode="HTML",
+                reply_markup=kb_reverify
+            )
+
 
     elif action == "apply":
         await callback.answer("Applying patches & checking syntax...")
         proj_dir = Path(config.CONTAINER_PROJECT_PATH)
 
-        # 1. Prepare main file patch + dependent patches
         patches_to_apply = [{
             "file_path": task["file_path"],
             "search_block": (task.get("search_block") or "").strip(),
             "ready_code_fix": task["ready_code_fix"].strip()
         }]
 
-        # Add dependent patches from JSON if present
         dep_raw = task.get("dependent_patches") or "[]"
         try:
             dep_patches = json.loads(dep_raw) if isinstance(dep_raw, str) else dep_raw
@@ -517,7 +583,6 @@ async def handle_task_actions(callback: CallbackQuery):
         except Exception:
             pass
 
-        # 2. Apply all patches atomically
         applied_files = []
         for patch in patches_to_apply:
             clean_rel = patch["file_path"].lstrip("/\\")
@@ -540,7 +605,8 @@ async def handle_task_actions(callback: CallbackQuery):
                 continue
 
             match_fix = norm_r_fix if match_block == norm_s_block else norm_r_fix.strip()
-            target_path.write_text(normalized_content.replace(match_block, match_fix, 1), encoding="utf-8")
+            new_content = normalized_content.replace(match_block, match_fix, 1)
+            target_path.write_text(new_content, encoding="utf-8")
             applied_files.append(target_path)
 
             syntax_error = None
@@ -562,35 +628,8 @@ async def handle_task_actions(callback: CallbackQuery):
                     f"<pre><code>{html.escape(syntax_error)}</code></pre>",
                     parse_mode="HTML"
                 )
-                return"utf-8")
-                applied_files.append(target_path)
-            elif norm_s_block and norm_s_block.strip() in normalized_content:
-                new_content = normalized_content.replace(norm_s_block.strip(), norm_r_fix.strip(), 1)
-                target_path.write_text(new_content, encoding="utf-8")
-                applied_files.append(target_path)
+                return
 
-                syntax_error = None
-                if target_path.suffix == ".py":
-                    try:
-                        py_compile.compile(target_path, doraise=True)
-                    except py_compile.PyCompileError as e:
-                        syntax_error = str(e)
-                elif target_path.suffix == ".json":
-                    try:
-                        json.loads(target_path.read_text(encoding="utf-8"))
-                    except Exception as e:
-                        syntax_error = str(e)
-
-                if syntax_error:
-                    target_path.write_text(content, encoding="utf-8")
-                    await callback.message.answer(
-                        f"❌ <b>Syntax Error in {html.escape(patch['file_path'])}! Rollback applied.</b>\n"
-                        f"<pre><code>{html.escape(syntax_error)}</code></pre>",
-                        parse_mode="HTML"
-                    )
-                    return
-
-        # 3. Git commit if changes succeeded
         if applied_files:
             try:
                 for f in applied_files:
@@ -602,16 +641,23 @@ async def handle_task_actions(callback: CallbackQuery):
 
             await db.update_task_status(task_id, "completed")
             await callback.message.edit_reply_markup(reply_markup=None)
+
+            kb_applied = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔍 Verify Fix with AI", callback_data=f"task:verify:{task_id}")],
+                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")]
+            ])
             await callback.message.answer(
-                f"✅ <b>Fix applied to {len(applied_files)} file(s) and committed!</b>",
-                parse_mode="HTML"
+                f"✅ <b>Fix applied to {len(applied_files)} file(s) and committed!</b>\n\n"
+                f"Click <b>🔍 Verify Fix with AI</b> if you want to inspect implementation consistency:",
+                parse_mode="HTML",
+                reply_markup=kb_applied
             )
-            await send_task_to_user(chat_id)
         else:
             await callback.message.answer(
                 "⚠️ <b>Auto-Apply Failed:</b> Could not find the exact code block to replace.",
                 parse_mode="HTML"
             )
+
 
     elif action == "reject":
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -620,9 +666,8 @@ async def handle_task_actions(callback: CallbackQuery):
         try:
             code_dump = collect_project_context(config.CONTAINER_PROJECT_PATH)
             alt_task = await asyncio.to_thread(agent.generate_alternative_task, task, code_dump)
-
-            # Replace rejected task with newly generated alternative
             await db.replace_with_alternative_task(task_id, alt_task)
+
             await status_msg.edit_text("✨ Alternative solution generated!")
             await send_task_to_user(chat_id)
         except Exception as e:
@@ -630,38 +675,6 @@ async def handle_task_actions(callback: CallbackQuery):
             await db.update_task_status(task_id, "skipped")
             await status_msg.edit_text("🔄 Task skipped. Moving to next backlog item...")
             await send_task_to_user(chat_id)
-
-    elif action == "verify":
-        await callback.answer("🔍 Checking your code changes...")
-        status_msg = await callback.message.reply(
-            f"🕵️‍♂️ Inspecting <code>{html.escape(task['file_path'])}</code> to verify your fix...",
-            parse_mode="HTML"
-        )
-
-        try:
-            current_code = read_single_file(config.CONTAINER_PROJECT_PATH, task["file_path"])
-            verification = await asyncio.to_thread(agent.verify_task_fix, task, current_code)
-        except Exception as e:
-            await status_msg.edit_text(f"❌ Could not read file for verification: {html.escape(str(e))}")
-            return
-
-        feedback_escaped = html.escape(verification.feedback)
-        if verification.is_completed:
-            await db.update_task_status(task_id, "completed")
-            await callback.message.edit_reply_markup(reply_markup=None)
-            await status_msg.edit_text(
-                f"✅ <b>Verification Passed!</b>\n\n{feedback_escaped}\n\n"
-                f"Task marked as completed! Moving to next task... 🚀",
-                parse_mode="HTML"
-            )
-            await send_task_to_user(chat_id)
-        else:
-            await db.reset_ignored_count()
-            await status_msg.edit_text(
-                f"⚠️ <b>Not quite ready yet!</b>\n\n{feedback_escaped}\n\n"
-                f"<i>Update the file and click <b>🔍 Verify Fix</b> again when ready.</i>",
-                parse_mode="HTML"
-            )
 
 @dp.callback_query(F.data == "git:commit_push")
 async def handle_git_commit_push(callback: CallbackQuery):
