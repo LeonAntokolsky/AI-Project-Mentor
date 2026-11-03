@@ -31,7 +31,7 @@ class Database:
                     current_focus TEXT DEFAULT ''
                 )
             """)
-            for col_def in ["is_verified INTEGER DEFAULT 0", "current_focus TEXT DEFAULT ' '"]:
+            for col_def in ["is_verified INTEGER DEFAULT 0", "current_focus TEXT DEFAULT ''"]:
                 try:
                     await db.execute(f"ALTER TABLE project_state ADD COLUMN {col_def}")
                 except Exception:
@@ -63,15 +63,26 @@ class Database:
                     pass
             await db.commit()
 
-    async def set_chat_id(self, chat_id: int):
-        """Registers or updates the active Telegram chat_id."""
+    async def _update_state_field(self, column: str, value: any):
+        """Helper to upsert a single field in project_state for row id=1."""
+        allowed_columns = {
+            "chat_id", "ping_interval_hours", "is_verified", "summary",
+            "current_focus", "current_session_id", "ignored_count"
+        }
+        if column not in allowed_columns:
+            raise ValueError(f"Invalid state column: {column}")
+
         async with self._get_db() as db:
-            await db.execute("""
-                INSERT INTO project_state (id, chat_id, ignored_count)
-                VALUES (1, ?, 0)
-                ON CONFLICT(id) DO UPDATE SET chat_id = excluded.chat_id
-            """, (chat_id,))
+            await db.execute(f"""
+                INSERT INTO project_state (id, {column})
+                VALUES (1, ?)
+                ON CONFLICT(id) DO UPDATE SET {column} = excluded.{column}
+            """, (value,))
             await db.commit()
+
+    async def set_chat_id(self, chat_id: int):
+        """Sets or updates the active Telegram chat ID."""
+        await self._update_state_field("chat_id", chat_id)
 
     async def get_chat_id(self) -> Optional[int]:
         """Retrieves the registered Telegram chat_id."""
@@ -80,15 +91,13 @@ class Database:
             row = await cursor.fetchone()
             return row[0] if row and row[0] else None
 
-    async def set_ping_interval(self, hours: int):
-        """Updates the reminder interval in hours."""
-        async with self._get_db() as db:
-            await db.execute("""
-                INSERT INTO project_state (id, ping_interval_hours)
-                VALUES (1, ?)
-                ON CONFLICT(id) DO UPDATE SET ping_interval_hours = excluded.ping_interval_hours
-            """, (hours,))
-            await db.commit()
+    async def set_ping_interval(self, interval_hours: int):
+        """Sets or updates the ping interval in hours."""
+        await self._update_state_field("ping_interval_hours", interval_hours)
+
+    async def set_user_verified(self):
+        """Marks user as verified for filesystem access."""
+        await self._update_state_field("is_verified", 1)
 
     async def get_ping_interval(self, default_hours: int = 24) -> int:
         """Retrieves the current reminder interval in hours."""
@@ -249,12 +258,3 @@ class Database:
             cursor = await db.execute("SELECT is_verified FROM project_state WHERE id = 1")
             row = await cursor.fetchone()
             return bool(row and row[0])
-
-    async def set_user_verified(self, chat_id: int):
-        """Marks the user as verified after passing filesystem ownership proof."""
-        async with self._get_db() as db:
-            await db.execute("""
-                INSERT INTO project_state (id, chat_id, is_verified) VALUES (1, ?, 1)
-                ON CONFLICT(id) DO UPDATE SET chat_id = excluded.chat_id, is_verified = 1
-            """, (chat_id,))
-            await db.commit()
