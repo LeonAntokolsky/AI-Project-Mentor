@@ -14,6 +14,9 @@ class Database:
         """Centralized async context manager providing a configured SQLite connection."""
         async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
             await db.execute("PRAGMA journal_mode=WAL;")
+            await db.execute("PRAGMA synchronous=NORMAL;")
+            await db.execute("PRAGMA cache_size=-64000;")
+            await db.execute("PRAGMA busy_timeout=5000;")
             db.row_factory = aiosqlite.Row
             yield db
 
@@ -21,16 +24,16 @@ class Database:
         """Initializes SQLite tables and runs safe schema migrations."""
         async with self._get_db() as db:
             await db.execute(f"""
-                CREATE TABLE IF NOT EXISTS project_state (
-                    id INTEGER PRIMARY KEY CHECK (id = 1),
-                    chat_id INTEGER,
-                    summary TEXT,
-                    ignored_count INTEGER DEFAULT 0,
-                    ping_interval_hours INTEGER DEFAULT {default_interval},
-                    is_verified INTEGER DEFAULT 0,
-                    current_focus TEXT DEFAULT ''
-                )
-            """)
+                    CREATE TABLE IF NOT EXISTS project_state (
+                        id INTEGER PRIMARY KEY CHECK (id = 1),
+                        chat_id INTEGER,
+                        summary TEXT,
+                        ignored_count INTEGER DEFAULT 0,
+                        ping_interval_hours INTEGER DEFAULT {default_interval},
+                        is_verified INTEGER DEFAULT 0,
+                        current_focus TEXT DEFAULT ''
+                    )
+                """)
             for col_def in ["is_verified INTEGER DEFAULT 0", "current_focus TEXT DEFAULT ''"]:
                 try:
                     await db.execute(f"ALTER TABLE project_state ADD COLUMN {col_def}")
@@ -38,17 +41,17 @@ class Database:
                     pass
 
             await db.execute("""
-                CREATE TABLE IF NOT EXISTS tasks (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    category TEXT,
-                    file_path TEXT,
-                    title TEXT,
-                    explanation TEXT,
-                    ready_code_fix TEXT,
-                    estimated_minutes INTEGER,
-                    status TEXT DEFAULT 'pending'
-                )
-            """)
+                    CREATE TABLE IF NOT EXISTS tasks (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        category TEXT,
+                        file_path TEXT,
+                        title TEXT,
+                        explanation TEXT,
+                        ready_code_fix TEXT,
+                        estimated_minutes INTEGER,
+                        status TEXT DEFAULT 'pending'
+                    )
+                """)
             migrations = [
                 ("tasks", "session_id TEXT DEFAULT ''"),
                 ("project_state", "current_session_id TEXT DEFAULT ''"),
@@ -62,23 +65,9 @@ class Database:
                     await db.execute(f"ALTER TABLE {table} ADD COLUMN {col}")
                 except Exception:
                     pass
-            await db.commit()
 
-    async def _update_state_field(self, column: str, value: Any):
-        """Helper to upsert a single field in project_state for row id=1."""
-        allowed_columns = {
-            "chat_id", "ping_interval_hours", "is_verified", "summary",
-            "current_focus", "current_session_id", "ignored_count"
-        }
-        if column not in allowed_columns:
-            raise ValueError(f"Invalid state column: {column}")
-
-        async with self._get_db() as db:
-            await db.execute(f"""
-                INSERT INTO project_state (id, {column})
-                VALUES (1, ?)
-                ON CONFLICT(id) DO UPDATE SET {column} = excluded.{column}
-            """, (value,))
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_status_id ON tasks(status, id);")
+            await db.execute("CREATE INDEX IF NOT EXISTS idx_tasks_session ON tasks(session_id);")
             await db.commit()
 
     async def set_chat_id(self, chat_id: int):
@@ -232,10 +221,11 @@ class Database:
     async def increment_ignored_count(self) -> tuple[int, str]:
         """Increments ignored counter and returns (ignored_count, project_summary)."""
         async with self._get_db() as db:
-            await db.execute("UPDATE project_state SET ignored_count = ignored_count + 1 WHERE id = 1")
-            await db.commit()
-            cursor = await db.execute("SELECT ignored_count, summary FROM project_state WHERE id = 1")
+            cursor = await db.execute(
+                "UPDATE project_state SET ignored_count = ignored_count + 1 WHERE id = 1 RETURNING ignored_count, summary"
+            )
             row = await cursor.fetchone()
+            await db.commit()
             return (row[0], row[1]) if row else (0, "")
 
     async def get_stats(self) -> dict:
