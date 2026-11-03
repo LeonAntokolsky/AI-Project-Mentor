@@ -541,18 +541,26 @@ async def handle_task_actions(callback: CallbackQuery):
                 target_path.write_text(new_content, encoding="utf-8")
                 applied_files.append(target_path)
 
+                syntax_error = None
                 if target_path.suffix == ".py":
                     try:
                         py_compile.compile(target_path, doraise=True)
                     except py_compile.PyCompileError as e:
-                        # Rollback on syntax failure
-                        target_path.write_text(content, encoding="utf-8")
-                        await callback.message.answer(
-                            f"❌ <b>Syntax Error in {html.escape(patch['file_path'])}! Rollback applied.</b>\n"
-                            f"<pre><code>{html.escape(str(e))}</code></pre>",
-                            parse_mode="HTML"
-                        )
-                        return
+                        syntax_error = str(e)
+                elif target_path.suffix == ".json":
+                    try:
+                        json.loads(target_path.read_text(encoding="utf-8"))
+                    except Exception as e:
+                        syntax_error = str(e)
+
+                if syntax_error:
+                    target_path.write_text(content, encoding="utf-8")
+                    await callback.message.answer(
+                        f"❌ <b>Syntax Error in {html.escape(patch['file_path'])}! Rollback applied.</b>\n"
+                        f"<pre><code>{html.escape(syntax_error)}</code></pre>",
+                        parse_mode="HTML"
+                    )
+                    return
 
         # 3. Git commit if changes succeeded
         if applied_files:
