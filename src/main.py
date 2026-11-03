@@ -603,8 +603,8 @@ async def handle_task_actions(callback: CallbackQuery):
 
         patches_to_apply = [{
             "file_path": task["file_path"],
-            "search_block": (task.get("search_block") or "").strip(),
-            "ready_code_fix": task["ready_code_fix"].strip()
+            "search_block": (task.get("search_block") or "").strip("\r\n"),
+            "ready_code_fix": (task.get("ready_code_fix") or "").rstrip("\r\n")
         }]
 
         dep_raw = task.get("dependent_patches") or "[]"
