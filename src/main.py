@@ -155,6 +155,17 @@ async def send_settings_menu(target: Message | CallbackQuery):
     )
     await send(text, parse_mode="HTML", reply_markup=get_settings_keyboard(hours))
 
+async def send_focus_menu(target: Message | CallbackQuery):
+    """Sends the focused audit menu for both command and quick action button callbacks."""
+    chat_id, send = resolve_target_channel(target)
+    await db.set_chat_id(chat_id)
+    text = (
+        "🧭 <b>Focused Codebase Audit</b>\n\n"
+        "Choose a focus preset below, or simply <b>type any custom goal in the chat</b> "
+        "(e.g., <i>'Add rate limiting and protect database calls'</i>):"
+    )
+    await send(text, parse_mode="HTML", reply_markup=get_focus_presets_keyboard())
+
 def get_session_complete_keyboard() -> InlineKeyboardMarkup:
     """Builds quick action buttons after session completion (without 'Next Task')."""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -617,12 +628,7 @@ async def handle_quick_actions(callback: CallbackQuery):
     elif action == "status":
         await send_status_view(callback)
     elif action == "scan":
-        await callback.message.answer(
-            "🧭 <b>Focused Codebase Audit</b>\n\n"
-            "Choose a focus preset below, or simply <b>type any custom goal in the chat</b>:",
-            parse_mode="HTML",
-            reply_markup=get_focus_presets_keyboard()
-        )
+        await send_focus_menu(callback)
     elif action == "settings":
         await send_settings_menu(callback)
 
@@ -824,14 +830,7 @@ async def cmd_focus(message: Message):
     if len(parts) > 1 and parts[1].strip():
         await run_codebase_scan(message.chat.id, focus_direction=parts[1].strip())
         return
-
-    await message.answer(
-        "🧭 <b>Focused Codebase Audit</b>\n\n"
-        "Choose a focus preset below, or simply <b>type any custom goal in the chat</b> "
-        "(e.g., <i>'Add rate limiting and protect database calls'</i>):",
-        parse_mode="HTML",
-        reply_markup=get_focus_presets_keyboard()
-    )
+    await send_focus_menu(message)
 
 @dp.callback_query(F.data.startswith("focus_preset:"))
 async def handle_focus_preset(callback: CallbackQuery):
