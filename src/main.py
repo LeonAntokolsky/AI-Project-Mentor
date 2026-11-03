@@ -4,7 +4,9 @@ import secrets
 import os
 import random
 import logging
+import config
 import subprocess
+import py_compile
 from typing import Dict
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -17,8 +19,6 @@ from aiogram.types import (
 )
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from google.genai.errors import APIError
-
-import config
 from scanner import collect_project_context, read_single_file
 from agent import MentorAgent
 from database import Database
@@ -153,15 +153,11 @@ async def setup_bot_commands(bot_instance: Bot):
     await bot_instance.set_my_commands(commands)
 
 def get_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
-    """Builds inline buttons for verifying, snoozing, or skipping a task."""
+    """Builds interactive buttons for a specific task."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="✅ Verify & Done", callback_data=f"verify:{task_id}"),
-            InlineKeyboardButton(text="⏭ Skip", callback_data=f"skip:{task_id}")
-        ],
-        [
-            InlineKeyboardButton(text="⏳ Snooze (Remind Tomorrow)", callback_data=f"snooze:{task_id}")
-        ]
+        [InlineKeyboardButton(text="🛠 Apply Fix Auto", callback_data=f"task:apply:{task_id}")],
+        [InlineKeyboardButton(text="✅ Done Manually", callback_data=f"task:done:{task_id}")],
+        [InlineKeyboardButton(text="🔄 Reject & Alternative", callback_data=f"task:reject:{task_id}")]
     ])
 
 def get_quick_actions_keyboard() -> InlineKeyboardMarkup:

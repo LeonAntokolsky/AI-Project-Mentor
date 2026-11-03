@@ -17,10 +17,13 @@ class BacklogTask(BaseModel):
     title: str = Field(description="Short, actionable task title (3-7 words)")
     explanation: str = Field(description="Clear explanation of why this matters and the value it brings (max 3 sentences)")
     expected_profit: str = Field(
-        description="Concrete ROI/benefit: why this approach is better and what measurable profit it brings (performance, security, maintainability, or UX)"
+        description="Concrete ROI/benefit: why this approach is better and what measurable profit it brings"
+    )
+    search_block: str = Field(
+        description="The EXACT lines of original code to be replaced. Must be an exact substring match to the file."
     )
     ready_code_fix: str = Field(
-        description="Concise, ready-to-use code snippet or function to resolve the issue (strictly under 35 lines)"
+        description="The new code that will replace search_block."
     )
     estimated_minutes: int = Field(description="Estimated time to implement (5 to 30 minutes)")
 
@@ -65,9 +68,8 @@ class MentorAgent:
             "Analyze the provided project source code:\n"
             "1. Summarize the core purpose of the project (project_summary).\n"
             "2. Break findings down into bite-sized micro-tasks taking 10-20 minutes each.\n"
-            "3. For EVERY task, fill out 'expected_profit': clearly justify WHY this change is better "
-            "and what concrete profit/ROI the developer gets after implementing it.\n"
-            "4. Provide a concrete, copy-pasteable code snippet (ready_code_fix) under 35 lines. "
+            "3. For EVERY task, provide 'search_block' with the EXACT original code to change, and 'ready_code_fix' with the replacement.\n"
+            "4. STRICT RULE: If a fix requires updating imports, variables, or logic in OTHER files, you MUST generate separate Micro-Tasks for each dependent file. One task = One file.\n\n"
             "Use line numbers to reference locations, but DO NOT include line number prefixes inside the snippet.\n\n"
             f"PROJECT SOURCE CODE:\n{codebase_dump}"
         )

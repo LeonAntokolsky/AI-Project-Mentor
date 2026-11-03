@@ -54,6 +54,10 @@ class Database:
                 await db.execute("ALTER TABLE tasks ADD COLUMN expected_profit TEXT DEFAULT ''")
             except Exception:
                 pass
+            try:
+                await db.execute("ALTER TABLE tasks ADD COLUMN search_block TEXT DEFAULT ''")
+            except Exception:
+                pass
             await db.commit()
 
     async def set_chat_id(self, chat_id: int):
@@ -110,6 +114,7 @@ class Database:
                     t.file_path,
                     t.title,
                     t.explanation,
+                    t.search_block,
                     t.expected_profit,
                     t.ready_code_fix,
                     t.estimated_minutes,
@@ -117,12 +122,12 @@ class Database:
                 for t in audit.tasks
             ]
             await db.executemany("""
-                INSERT INTO tasks (
-                    category, file_path, title, explanation,
-                    expected_profit, ready_code_fix, estimated_minutes
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, records)
+                            INSERT INTO tasks (
+                                category, file_path, title, explanation,
+                                expected_profit, search_block, ready_code_fix, estimated_minutes
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                        """, records)
             await db.commit()
 
     async def get_next_task(self) -> Optional[dict]:
