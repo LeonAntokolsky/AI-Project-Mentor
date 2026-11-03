@@ -24,6 +24,8 @@ SECRET_PATTERNS = [
     re.compile(r'\b\d{8,10}:[a-zA-Z0-9_-]{35}\b'),
     re.compile(r'ghp_[a-zA-Z0-9]{36}'),
     re.compile(r'github_pat_[a-zA-Z0-9_]{82}'),
+    re.compile(r'\bAIza[0-9A-Za-z-_]{35}\b'),
+    re.compile(r'\bAKIA[0-9A-Z]{16}\b'),
     re.compile(r'-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----'),
 ]
 
@@ -89,7 +91,7 @@ def collect_project_context(base_dir: str, max_size: int = MAX_FILE_SIZE_BYTES) 
         if any(part in IGNORE_DIRS or part.startswith(".") for part in rel_parts[:-1]):
             continue
 
-        if path.name in IGNORE_FILES or path.suffix not in ALLOWED_EXTENSIONS:
+        if not is_scannable_file(path):
             continue
 
         if path.stat().st_size > max_size:
