@@ -6,7 +6,7 @@ services:
     env_file:
       - .env
     volumes:
-      - ${TARGET_PROJECT_PATH}:/workspace/project
+      - ${TARGET_PROJECT_PATH:-.}:/workspace/project
       # Mount local src directory for instant code updates
       - ./src:/app/src
       # Persist SQLite database on host machine
