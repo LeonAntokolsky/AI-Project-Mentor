@@ -79,6 +79,21 @@ def extract_emojis(reactions_list: list) -> set[str]:
 def get_cute_heart_reply() -> str:
     return random.choice(CUTE_HEART_REPLIES)
 
+def apply_text_patch(content: str, search_block: str, replacement: str) -> str | None:
+    """Pure function to safely apply search-and-replace with newline normalization."""
+    norm_content = content.replace("\r\n", "\n")
+    norm_search = search_block.replace("\r\n", "\n")
+    norm_replace = replacement.replace("\r\n", "\n")
+
+    target_match = norm_search if norm_search and norm_search in norm_content else (
+        norm_search.strip() if norm_search and norm_search.strip() in norm_content else None
+    )
+    if not target_match:
+        return None
+
+    actual_fix = norm_replace if target_match == norm_search else norm_replace.strip()
+    return norm_content.replace(target_match, actual_fix, 1)
+
 def format_status_message(stats: dict) -> str:
     return (
         f"📊 <b>Project Momentum Status</b>\n\n"
@@ -503,7 +518,7 @@ async def handle_task_actions(callback: CallbackQuery):
     await db.set_chat_id(chat_id)
 
     task = await db.get_task_by_id(task_id)
-    if not task or task['status'] != 'pending':
+    if not task or (action != "verify" and task['status'] != 'pending'):
         await callback.answer("Task already processed or missing.", show_alert=True)
         return
 
@@ -594,18 +609,9 @@ async def handle_task_actions(callback: CallbackQuery):
             s_block = patch["search_block"]
             r_fix = patch["ready_code_fix"]
 
-            normalized_content = content.replace("\r\n", "\n")
-            norm_s_block = s_block.replace("\r\n", "\n")
-            norm_r_fix = r_fix.replace("\r\n", "\n")
-
-            match_block = norm_s_block if norm_s_block and norm_s_block in normalized_content else (
-                norm_s_block.strip() if norm_s_block and norm_s_block.strip() in normalized_content else ""
-            )
-            if not match_block:
+            new_content = apply_text_patch(content, s_block, r_fix)
+            if new_content is None:
                 continue
-
-            match_fix = norm_r_fix if match_block == norm_s_block else norm_r_fix.strip()
-            new_content = normalized_content.replace(match_block, match_fix, 1)
             target_path.write_text(new_content, encoding="utf-8")
             applied_files.append(target_path)
 
