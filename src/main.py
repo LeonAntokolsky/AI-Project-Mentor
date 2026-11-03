@@ -528,8 +528,16 @@ async def handle_task_actions(callback: CallbackQuery):
             s_block = patch["search_block"]
             r_fix = patch["ready_code_fix"]
 
-            if s_block and s_block in content:
-                new_content = content.replace(s_block, r_fix, 1)
+            normalized_content = content.replace("\r\n", "\n")
+            norm_s_block = s_block.replace("\r\n", "\n")
+            norm_r_fix = r_fix.replace("\r\n", "\n")
+
+            if norm_s_block and norm_s_block in normalized_content:
+                new_content = normalized_content.replace(norm_s_block, norm_r_fix, 1)
+                target_path.write_text(new_content, encoding="utf-8")
+                applied_files.append(target_path)
+            elif norm_s_block and norm_s_block.strip() in normalized_content:
+                new_content = normalized_content.replace(norm_s_block.strip(), norm_r_fix.strip(), 1)
                 target_path.write_text(new_content, encoding="utf-8")
                 applied_files.append(target_path)
 
