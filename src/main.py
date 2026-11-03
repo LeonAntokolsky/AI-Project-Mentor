@@ -780,63 +780,68 @@ async def handle_task_actions(callback: CallbackQuery):
 
 @dp.callback_query(F.data == "git:commit_push")
 async def handle_git_commit_push(callback: CallbackQuery):
-    await callback.answer("📦 Checking modified files in Git...")
+    await callback.answer("Checking modified files in Git...")
     proj_dir = config.CONTAINER_PROJECT_PATH
 
     try:
-        # Allow git to operate inside the mounted directory
         subprocess.run(["git", "config", "--global", "--add", "safe.directory", proj_dir], check=False)
 
-        is_repo = subprocess.run(["git", "rev-parse", "--is-inside-work-tree"], cwd=proj_dir, capture_output=True, text=True)
-        if is_repo.returncode != 0:
-            await callback.message.answer("⚠️ Target directory is not a Git repository. Run <code>git init</code> first.", parse_mode="HTML")
+        data_dir = Path(proj_dir) / "data"
+        if data_dir.exists():
+            gitkeep = data_dir / ".gitkeep"
+            if not gitkeep.exists():
+                gitkeep.touch()
+
+        subprocess.run(["git", "add", "-A"], cwd=proj_dir, check=False)
+
+        staged_proc = subprocess.run(
+            ["git", "diff", "--cached", "HEAD"],
+            cwd=proj_dir, capture_output=True, text=True, errors="replace"
+        )
+        staged_diff = staged_proc.stdout.strip()
+
+        if not staged_diff:
+            staged_proc_all = subprocess.run(
+                ["git", "diff", "--cached"],
+                cwd=proj_dir, capture_output=True, text=True, errors="replace"
+            )
+            staged_diff = staged_proc_all.stdout.strip()
+
+        if not staged_diff:
+            await callback.message.answer("ℹ️ <b>Working tree clean:</b> No new changes to commit.", parse_mode="HTML")
             return
 
-        diff_proc = subprocess.run(["git", "diff", "HEAD"], cwd=proj_dir, capture_output=True, text=True)
-        diff_text = diff_proc.stdout.strip() if diff_proc.returncode == 0 else ""
-        if not diff_text:
-            unstaged_diff = subprocess.run(["git", "diff"], cwd=proj_dir, capture_output=True, text=True)
-            diff_text = unstaged_diff.stdout.strip()
+        commit_msg = await asyncio.to_thread(agent.generate_commit_message, staged_diff)
+        if not commit_msg:
+            commit_msg = "chore: update project files"
 
-        if not diff_text:
-            status_proc = subprocess.run(["git", "status", "--porcelain"], cwd=proj_dir, capture_output=True, text=True)
-            diff_text = status_proc.stdout.strip()
-
-        if not diff_text:
-            await callback.message.answer("ℹ️ No modified files to commit (working tree is clean).")
+        commit_res = subprocess.run(
+            ["git", "commit", "-m", commit_msg],
+            cwd=proj_dir, capture_output=True, text=True, errors="replace"
+        )
+        if commit_res.returncode != 0:
+            err_output = commit_res.stderr.strip() or commit_res.stdout.strip()
+            await callback.message.answer(
+                f"⚠️ <b>Git Commit Skipped:</b>\n<pre><code>{html.escape(err_output)}</code></pre>",
+                parse_mode="HTML"
+            )
             return
 
-        status_msg = await callback.message.answer("🧠 Generating commit message from changes and updating Git...")
+        push_res = subprocess.run(
+            ["git", "push"],
+            cwd=proj_dir, capture_output=True, text=True, errors="replace"
+        )
+        push_status = "and pushed to remote 🚀" if push_res.returncode == 0 else "(push skipped: no remote branch configured)"
 
-        # 1. Generate commit description via Gemini
-        commit_msg = await asyncio.to_thread(agent.generate_commit_message, diff_text)
+        await callback.message.answer(
+            f"✅ <b>Committed successfully {push_status}!</b>\n\n"
+            f"<b>Message:</b> <code>{html.escape(commit_msg)}</code>",
+            parse_mode="HTML"
+        )
 
-        # 2. Stage ONLY modified files (git add -u ignores untruncated junk and untracked files)
-        subprocess.run(["git", "add", "-u"], cwd=proj_dir, check=True)
-
-        # 3. Set default author credentials (if not configured in container) and commit
-        subprocess.run(["git", "config", "user.name", "AI Project Mentor"], cwd=proj_dir, check=False)
-        subprocess.run(["git", "config", "user.email", "mentor@local"], cwd=proj_dir, check=False)
-        subprocess.run(["git", "commit", "-m", commit_msg], cwd=proj_dir, check=True)
-
-        # 4. Attempt git push
-        push_proc = subprocess.run(["git", "push"], cwd=proj_dir, capture_output=True, text=True)
-        if push_proc.returncode == 0:
-            await status_msg.edit_text(
-                f"✅ <b>Git successfully updated and pushed!</b>\n"
-                f"📝 <b>Commit:</b> <code>{html.escape(commit_msg)}</code>",
-                parse_mode="HTML"
-            )
-        else:
-            await status_msg.edit_text(
-                f"✅ <b>Local commit created successfully!</b>\n"
-                f"📝 <code>{html.escape(commit_msg)}</code>\n\n"
-                f"⚠️ <i>Push requires host authentication:</i>\n<code>{html.escape(push_proc.stderr[:300])}</code>",
-                parse_mode="HTML"
-            )
     except Exception as e:
+        logging.error(f"Git commit/push error: {e}")
         await callback.message.answer(f"❌ <b>Git Error:</b> {html.escape(str(e))}", parse_mode="HTML")
-
 
 # Fallback handler AT THE VERY BOTTOM so the user NEVER gets silence
 @dp.message(Command("focus"))
