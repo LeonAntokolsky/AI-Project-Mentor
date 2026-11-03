@@ -188,8 +188,3 @@ Reports are saved to `data/reports/Report_<timestamp>.pdf` and sent directly to 
 2. **Trust the Compiler**: If an auto-apply causes a syntax alert, the engine safely rolls back. Review the bot's compiler output and click **Reject & Alt**.
 3. **Use Motivational Check-ins**: When motivation dips, run `/motivate` to get high-level product feedback and MVP feature reduction advice.
 
----
-
-## 📄 License
-
-This project is distributed under the MIT License. See [LICENSE](LICENSE) for details.
