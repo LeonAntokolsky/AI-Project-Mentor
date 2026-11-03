@@ -243,6 +243,13 @@ def get_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
     ])
 
+def get_post_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
+    """Builds navigation keyboard after a task is finished or applied."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🔍 Verify Fix with AI", callback_data=f"task:verify:{task_id}")],
+        [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")]
+    ])
+
 def get_quick_actions_keyboard() -> InlineKeyboardMarkup:
     """Builds a rescue keyboard so the user never gets stuck."""
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -540,12 +547,7 @@ async def handle_quick_actions(callback: CallbackQuery):
         await db.reset_ignored_count()
         await send_task_to_user(chat_id)
     elif action == "status":
-        stats = await db.get_stats()
-        await callback.message.answer(
-            format_status_message(stats),
-            parse_mode="HTML",
-            reply_markup=get_quick_actions_keyboard()
-        )
+        await send_status_view(callback)
     elif action == "scan":
         await callback.message.answer(
             "🧭 <b>Focused Codebase Audit</b>\n\n"
@@ -561,11 +563,23 @@ async def handle_quick_actions(callback: CallbackQuery):
 async def handle_task_actions(callback: CallbackQuery):
     parts = callback.data.split(":")
     action = parts[1]
-    task_id = int(parts[2])
     chat_id = callback.message.chat.id
     await db.set_chat_id(chat_id)
 
+    if action == "stop_session":
+        await callback.answer("Stopping session...")
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await send_session_pdf_report(chat_id)
+        return
+
+    if len(parts) < 3:
+        await callback.answer("Invalid task request.", show_alert=True)
+        return
+
+    task_id = int(parts[2])
     task = await db.get_task_by_id(task_id)
+
+    # Разрешаем запуск verify даже если задача уже в статусе 'completed'
     if not task or (action != "verify" and task['status'] != 'pending'):
         await callback.answer("Task already processed or missing.", show_alert=True)
         return
@@ -577,21 +591,16 @@ async def handle_task_actions(callback: CallbackQuery):
 
         kb_post_done = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🔍 Verify Fix with AI", callback_data=f"task:verify:{task_id}")],
-            [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")]
+            [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
+            [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
         ])
         await callback.message.answer(
             f"✅ <b>Task marked as done manually!</b>\n"
             f"File: <code>{html.escape(task['file_path'])}</code>\n\n"
-            f"If you edited the code yourself, click below to verify syntax & logic with AI:",
+            f"Click below to verify syntax & logic with AI:",
             parse_mode="HTML",
             reply_markup=kb_post_done
         )
-
-    elif action == "stop_session":
-        await callback.answer("Stopping session...")
-        await callback.message.edit_reply_markup(reply_markup=None)
-        await send_session_pdf_report(chat_id)
-        return
 
     elif action == "verify":
         await callback.answer("🔍 Inspecting code changes...")
@@ -613,7 +622,8 @@ async def handle_task_actions(callback: CallbackQuery):
             await callback.message.edit_reply_markup(reply_markup=None)
 
             kb_next = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")]
+                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
+                [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
             ])
             await status_msg.edit_text(
                 f"✅ <b>Verification Passed!</b>\n\n{feedback_escaped}\n\n"
@@ -625,7 +635,8 @@ async def handle_task_actions(callback: CallbackQuery):
             await db.reset_ignored_count()
             kb_reverify = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔍 Verify Fix Again", callback_data=f"task:verify:{task_id}")],
-                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")]
+                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
+                [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
             ])
             await status_msg.edit_text(
                 f"⚠️ <b>Not quite ready yet!</b>\n\n{feedback_escaped}\n\n"
@@ -634,15 +645,14 @@ async def handle_task_actions(callback: CallbackQuery):
                 reply_markup=kb_reverify
             )
 
-
     elif action == "apply":
         await callback.answer("Applying patches & checking syntax...")
         proj_dir = Path(config.CONTAINER_PROJECT_PATH)
 
         patches_to_apply = [{
             "file_path": task["file_path"],
-            "search_block": (task.get("search_block") or "").strip("\r\n"),
-            "ready_code_fix": (task.get("ready_code_fix") or "").rstrip("\r\n")
+            "search_block": (task.get("search_block") or "").strip(),
+            "ready_code_fix": task["ready_code_fix"].strip()
         }]
 
         dep_raw = task.get("dependent_patches") or "[]"
@@ -663,13 +673,32 @@ async def handle_task_actions(callback: CallbackQuery):
             s_block = patch["search_block"]
             r_fix = patch["ready_code_fix"]
 
-            new_content = apply_text_patch(content, s_block, r_fix)
-            if new_content is None:
+            normalized_content = content.replace("\r\n", "\n")
+            norm_s_block = s_block.replace("\r\n", "\n")
+            norm_r_fix = r_fix.replace("\r\n", "\n")
+
+            match_block = norm_s_block if norm_s_block and norm_s_block in normalized_content else (
+                norm_s_block.strip() if norm_s_block and norm_s_block.strip() in normalized_content else ""
+            )
+            if not match_block:
                 continue
+
+            match_fix = norm_r_fix if match_block == norm_s_block else norm_r_fix.strip()
+            new_content = normalized_content.replace(match_block, match_fix, 1)
             target_path.write_text(new_content, encoding="utf-8")
             applied_files.append(target_path)
 
-            syntax_error = check_file_syntax(target_path)
+            syntax_error = None
+            if target_path.suffix == ".py":
+                try:
+                    py_compile.compile(target_path, doraise=True)
+                except py_compile.PyCompileError as e:
+                    syntax_error = str(e)
+            elif target_path.suffix == ".json":
+                try:
+                    json.loads(target_path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    syntax_error = str(e)
 
             if syntax_error:
                 target_path.write_text(content, encoding="utf-8")
@@ -694,11 +723,11 @@ async def handle_task_actions(callback: CallbackQuery):
 
             kb_applied = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔍 Verify Fix with AI", callback_data=f"task:verify:{task_id}")],
-                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")]
+                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
+                [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
             ])
             await callback.message.answer(
-                f"✅ <b>Fix applied to {len(applied_files)} file(s) and committed!</b>\n\n"
-                f"Click <b>🔍 Verify Fix with AI</b> if you want to inspect implementation consistency:",
+                f"✅ <b>Fix applied to {len(applied_files)} file(s) and committed!</b>",
                 parse_mode="HTML",
                 reply_markup=kb_applied
             )
@@ -707,7 +736,6 @@ async def handle_task_actions(callback: CallbackQuery):
                 "⚠️ <b>Auto-Apply Failed:</b> Could not find the exact code block to replace.",
                 parse_mode="HTML"
             )
-
 
     elif action == "reject":
         await callback.message.edit_reply_markup(reply_markup=None)
