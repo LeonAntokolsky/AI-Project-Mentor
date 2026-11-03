@@ -19,24 +19,22 @@ ALLOWED_EXTENSIONS = {
     ".md", ".json", ".yml", ".yaml", ".sql", ".sh", ".dockerfile"
 }
 
-SECRET_PATTERNS = [
-    re.compile(r'(?i)(api[_-]?key|secret|token|password|auth)\s*[:=]\s*["\']?[a-zA-Z0-9_\-\.:/+=]{12,}["\']?'),
-    re.compile(r'\b\d{8,10}:[a-zA-Z0-9_-]{35}\b'),
-    re.compile(r'ghp_[a-zA-Z0-9]{36}'),
-    re.compile(r'github_pat_[a-zA-Z0-9_]{82}'),
-    re.compile(r'\bAIza[0-9A-Za-z-_]{35}\b'),
-    re.compile(r'\bAKIA[0-9A-Z]{16}\b'),
-    re.compile(r'-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----'),
-]
+COMBINED_SECRET_PATTERN = re.compile(
+    r'(?i)(api[_-]?key|secret|token|password|auth)\s*[:=]\s*["\']?[a-zA-Z0-9_\-\.:/+=]{12,}["\']?'
+    r'|\b\d{8,10}:[a-zA-Z0-9_-]{35}\b'
+    r'|ghp_[a-zA-Z0-9]{36}'
+    r'|github_pat_[a-zA-Z0-9_]{82}'
+    r'|\bAIza[0-9A-Za-z-_]{35}\b'
+    r'|\bAKIA[0-9A-Z]{16}\b'
+    r'|-----BEGIN [A-Z ]+ PRIVATE KEY-----[\s\S]*?-----END [A-Z ]+ PRIVATE KEY-----'
+)
 
 MAX_FILE_SIZE_BYTES = 500_000
 
 def scrub_secrets(text: str | None) -> str:
     if not text:
         return ""
-    for pattern in SECRET_PATTERNS:
-        text = pattern.sub('<REDACTED_SECRET>', text)
-    return text
+    return COMBINED_SECRET_PATTERN.sub('<REDACTED_SECRET>', text)
 
 def is_scannable_file(path: Path) -> bool:
     """Determines whether a file path qualifies for scanning context."""
@@ -83,26 +81,20 @@ def collect_project_context(base_dir: str, max_size: int = MAX_FILE_SIZE_BYTES) 
 
     context_parts = []
 
-    for path in root_path.rglob("*"):
-        if not path.is_file():
-            continue
-
-        rel_parts = path.relative_to(root_path).parts
-        if any(part in IGNORE_DIRS or part.startswith(".") for part in rel_parts[:-1]):
-            continue
-
-        if not is_scannable_file(path):
-            continue
-
-        if path.stat().st_size > max_size:
-            continue
-
-        try:
-            rel_path_str = str(path.relative_to(root_path))
-            content = path.read_text(encoding="utf-8", errors="replace")
-            clean_content = scrub_secrets(content)
-            context_parts.append(f"--- File: {rel_path_str} ---\n{clean_content}\n")
-        except Exception:
-            continue
+    for root, dirs, files in os.walk(root_path):
+        dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith(".")]
+        for file_name in files:
+            file_path = Path(root) / file_name
+            if not is_scannable_file(file_path):
+                continue
+            try:
+                if file_path.stat().st_size > max_size:
+                    continue
+                rel_path_str = str(file_path.relative_to(root_path))
+                content = file_path.read_text(encoding="utf-8", errors="replace")
+                clean_content = scrub_secrets(content)
+                context_parts.append(f"--- File: {rel_path_str} ---\n{clean_content}\n")
+            except Exception:
+                continue
 
     return "\n".join(context_parts)
