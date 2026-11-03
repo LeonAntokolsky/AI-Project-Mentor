@@ -16,6 +16,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import (
     Message, CallbackQuery, InlineKeyboardMarkup,
     InlineKeyboardButton, BufferedInputFile, BotCommand,
@@ -222,9 +223,14 @@ async def run_task_verification(callback: CallbackQuery, task: dict):
     feedback_escaped = html.escape(verification.feedback)
     task_id = task["id"]
 
+    # Безопасно убираем клавиатуру у исходного сообщения
+    try:
+        await callback.message.edit_reply_markup(reply_markup=None)
+    except TelegramBadRequest:
+        pass
+
     if verification.is_completed:
         await db.update_task_status(task_id, "completed")
-        await callback.message.edit_reply_markup(reply_markup=None)
 
         kb_next = InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
@@ -238,16 +244,11 @@ async def run_task_verification(callback: CallbackQuery, task: dict):
         )
     else:
         await db.reset_ignored_count()
-        kb_reverify = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🔍 Verify Fix Again", callback_data=f"task:verify:{task_id}")],
-            [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
-            [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
-        ])
         await status_msg.edit_text(
             f"⚠️ <b>Verification Alert:</b>\n\n{feedback_escaped}\n\n"
             f"<i>Update the file and click below to re-verify when ready:</i>",
             parse_mode="HTML",
-            reply_markup=kb_reverify
+            reply_markup=get_post_task_keyboard(task_id)
         )
 
 @dp.message(Command("auth"))
@@ -635,7 +636,10 @@ async def handle_task_actions(callback: CallbackQuery):
 
     if action == "stop_session":
         await callback.answer("Stopping session...")
-        await callback.message.edit_reply_markup(reply_markup=None)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
         await send_session_pdf_report(chat_id)
         return
 
@@ -650,9 +654,7 @@ async def handle_task_actions(callback: CallbackQuery):
         await callback.answer("Task already processed or missing.", show_alert=True)
         return
 
-    # 2. Ручное подтверждение пользователем -> сразу авто-проверка через AI
     if action == "done":
-        await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer()
         await run_task_verification(callback, task)
 
@@ -685,14 +687,36 @@ async def handle_task_actions(callback: CallbackQuery):
                 continue
 
             content = target_path.read_text(encoding="utf-8")
-            new_content = apply_text_patch(content, patch["search_block"], patch["ready_code_fix"])
-            if new_content is None:
+            s_block = patch["search_block"]
+            r_fix = patch["ready_code_fix"]
+
+            normalized_content = content.replace("\r\n", "\n")
+            norm_s_block = s_block.replace("\r\n", "\n")
+            norm_r_fix = r_fix.replace("\r\n", "\n")
+
+            match_block = norm_s_block if norm_s_block and norm_s_block in normalized_content else (
+                norm_s_block.strip() if norm_s_block and norm_s_block.strip() in normalized_content else ""
+            )
+            if not match_block:
                 continue
 
+            match_fix = norm_r_fix if match_block == norm_s_block else norm_r_fix.strip()
+            new_content = normalized_content.replace(match_block, match_fix, 1)
             target_path.write_text(new_content, encoding="utf-8")
             applied_files.append(target_path)
 
-            syntax_error = check_file_syntax(target_path)
+            syntax_error = None
+            if target_path.suffix == ".py":
+                try:
+                    py_compile.compile(target_path, doraise=True)
+                except py_compile.PyCompileError as e:
+                    syntax_error = str(e)
+            elif target_path.suffix == ".json":
+                try:
+                    json.loads(target_path.read_text(encoding="utf-8"))
+                except Exception as e:
+                    syntax_error = str(e)
+
             if syntax_error:
                 target_path.write_text(content, encoding="utf-8")
                 await callback.message.answer(
@@ -711,12 +735,10 @@ async def handle_task_actions(callback: CallbackQuery):
             except Exception as e:
                 logging.debug(f"Git auto-commit failed: {e}")
 
-            await callback.message.edit_reply_markup(reply_markup=None)
             await callback.message.answer(
                 f"⚙️ <b>Fix applied to {len(applied_files)} file(s) and committed!</b> Running AI verification...",
                 parse_mode="HTML"
             )
-            # Автоматически запускаем ИИ-проверку внесённой правки
             await run_task_verification(callback, task)
         else:
             await callback.message.answer(
@@ -724,9 +746,11 @@ async def handle_task_actions(callback: CallbackQuery):
                 parse_mode="HTML"
             )
 
-    # 5. Отклонение задачи
     elif action == "reject":
-        await callback.message.edit_reply_markup(reply_markup=None)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            pass
         status_msg = await callback.message.answer("🧠 Generating an alternative strategy...")
 
         try:
@@ -741,6 +765,7 @@ async def handle_task_actions(callback: CallbackQuery):
             await db.update_task_status(task_id, "skipped")
             await status_msg.edit_text("🔄 Task skipped. Moving to next backlog item...")
             await send_task_to_user(chat_id)
+
 
 @dp.callback_query(F.data == "git:commit_push")
 async def handle_git_commit_push(callback: CallbackQuery):
