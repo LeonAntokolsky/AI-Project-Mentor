@@ -59,11 +59,31 @@
 +-----------------------------------------------------------------------------------+
 ```
 
-## Features
-- Codebase analysis and task generation
-- Telegram bot interface for task delivery
-- Scheduled reminders and motivational messages
-- Task tracking (pending, completed, skipped)
+## ✨ Core Capabilities
+
+### 🧠 UB-Mode Engineering Discipline
+The mentor operates under strict **UB-Mode (Make it Work -> Make it Right -> Follow Practice)** system instructions:
+- **Laziness Protocol**: Single source of truth; smallest possible diff that cleanly solves the root problem.
+- **Subtract Before You Add**: Strips accidental complexity before adding new logic.
+- **Boundary & Type Discipline**: Zero placeholders or ellipses (`# rest of code...`). All suggested fixes are 100% executable.
+- **Idempotency**: Running patches repeatedly yields identical deterministic states.
+
+### 🛡️ Automated Patching with Syntax Guardrails
+- **Exact Character Matching**: Replaces targeted code blocks without fuzzy misalignments or damaged indentation.
+- **Pre-Commit Syntax Checks**: Runs `py_compile` on Python files and `json.loads` on JSON files prior to committing.
+- **Auto-Rollback**: If a suggested fix introduces syntax errors, the original file is restored instantly, and the compiler traceback is sent to Telegram.
+- **Atomic Dependent Patches**: Automatically applies accompanying updates across multiple files (imports, caller signatures, configs) in a single unified step.
+
+### 🔒 Secret Scrubbing & Privacy by Design
+Before source code context reaches the LLM, regex pattern filters strip:
+- Telegram Bot Tokens, GitHub Personal Access Tokens (`ghp_*`, `github_pat_*`).
+- API Keys, generic credentials, and private keys (`-----BEGIN PRIVATE KEY-----`).
+- Environment files (`.env`, `.env.*`) and credentials caches are blocked by default.
+
+### 🎯 Focused Audits & Strategy Alternates
+- **1-Click Presets**: Security & Auth, Performance Optimization, Clean Code Refactoring, UX & Reliability, Unit Testing, Architecture.
+- **Natural Language Focus**: Type any phrase directly in chat (e.g., *"Refactor database pool to asyncpg"*) to trigger a targeted scan.
+- **Reject & Re-strategize**: Dislike a proposed fix? Hit **Reject & Alt** to have Gemini generate an alternative architectural pattern for the same issue.
 
 ## Setup
 1. Clone the repository: `git clone <repo-url> && cd ai-project-mentor`
