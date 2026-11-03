@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import html
 import secrets
@@ -78,6 +80,20 @@ def extract_emojis(reactions_list: list) -> set[str]:
 
 def get_cute_heart_reply() -> str:
     return random.choice(CUTE_HEART_REPLIES)
+
+def check_file_syntax(file_path: Path) -> str | None:
+    """Validates syntax for supported file types, returning error string if invalid."""
+    if file_path.suffix == ".py":
+        try:
+            py_compile.compile(file_path, doraise=True)
+        except py_compile.PyCompileError as err:
+            return str(err)
+    elif file_path.suffix == ".json":
+        try:
+            json.loads(file_path.read_text(encoding="utf-8"))
+        except Exception as err:
+            return str(err)
+    return None
 
 def apply_text_patch(content: str, search_block: str, replacement: str) -> str | None:
     """Pure function to safely apply search-and-replace with newline normalization."""
