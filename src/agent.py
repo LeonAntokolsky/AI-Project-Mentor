@@ -172,6 +172,29 @@ class MentorAgent:
         )
         return response.text
 
+    def generate_file_commit_message(self, file_path: str, diff_text: str) -> str:
+        """Generates a unique, concise Conventional Commit message tailored specifically to one modified file."""
+        prompt = (
+            f"Generate a unique, precise, single-line Conventional Commit message for the file '{file_path}'.\n"
+            "Format: '<type>(<scope>): <summary>' where scope is derived from the file name or component.\n"
+            "Make the summary specific to the exact modifications in this file, ensuring every file has a distinct comment.\n"
+            "Return plain text without quotes or markdown:\n\n"
+            f"{diff_text[:10000]}"
+        )
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.2),
+            )
+            lines = [line.strip() for line in (response.text or "").splitlines() if line.strip()]
+            if lines:
+                return lines[0]
+        except Exception:
+            pass
+        scope = Path(file_path).stem
+        return f"chore({scope}): update {Path(file_path).name}"
+
     def generate_commit_message(self, diff_text: str) -> str:
         """Generates a concise git commit message based on git diff."""
         prompt = (
