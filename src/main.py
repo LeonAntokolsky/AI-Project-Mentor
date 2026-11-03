@@ -205,6 +205,51 @@ async def send_session_pdf_report(chat_id: int):
         logging.error(f"Error generating PDF report: {e}")
         await status_msg.edit_text(f"❌ <b>Failed to generate PDF report:</b> {html.escape(str(e))}", parse_mode="HTML")
 
+async def run_task_verification(callback: CallbackQuery, task: dict):
+    """Inspects target file content and runs AI verification with Gemini automatically."""
+    status_msg = await callback.message.reply(
+        f"🕵️‍♂️ Inspecting <code>{html.escape(task['file_path'])}</code> to verify fix with AI...",
+        parse_mode="HTML"
+    )
+
+    try:
+        current_code = read_single_file(config.CONTAINER_PROJECT_PATH, task["file_path"])
+        verification = await asyncio.to_thread(agent.verify_task_fix, task, current_code)
+    except Exception as e:
+        await status_msg.edit_text(f"❌ Could not read file for verification: {html.escape(str(e))}")
+        return
+
+    feedback_escaped = html.escape(verification.feedback)
+    task_id = task["id"]
+
+    if verification.is_completed:
+        await db.update_task_status(task_id, "completed")
+        await callback.message.edit_reply_markup(reply_markup=None)
+
+        kb_next = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
+            [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
+        ])
+        await status_msg.edit_text(
+            f"✅ <b>Verification Passed!</b>\n\n{feedback_escaped}\n\n"
+            f"Task verified and marked as completed! 🚀",
+            parse_mode="HTML",
+            reply_markup=kb_next
+        )
+    else:
+        await db.reset_ignored_count()
+        kb_reverify = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🔍 Verify Fix Again", callback_data=f"task:verify:{task_id}")],
+            [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
+            [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
+        ])
+        await status_msg.edit_text(
+            f"⚠️ <b>Verification Alert:</b>\n\n{feedback_escaped}\n\n"
+            f"<i>Update the file and click below to re-verify when ready:</i>",
+            parse_mode="HTML",
+            reply_markup=kb_reverify
+        )
+
 @dp.message(Command("auth"))
 async def cmd_auth(message: Message):
     if ALLOWED_USER_ID and message.from_user.id != ALLOWED_USER_ID:
@@ -588,7 +633,6 @@ async def handle_task_actions(callback: CallbackQuery):
     chat_id = callback.message.chat.id
     await db.set_chat_id(chat_id)
 
-    # 1. Остановка сессии и генерация PDF (не требует task_id)
     if action == "stop_session":
         await callback.answer("Stopping session...")
         await callback.message.edit_reply_markup(reply_markup=None)
@@ -606,72 +650,24 @@ async def handle_task_actions(callback: CallbackQuery):
         await callback.answer("Task already processed or missing.", show_alert=True)
         return
 
-    # 2. Ручная отметка выполнения
+    # 2. Ручное подтверждение пользователем -> сразу авто-проверка через AI
     if action == "done":
-        await db.update_task_status(task_id, "completed")
         await callback.message.edit_reply_markup(reply_markup=None)
         await callback.answer()
-        await callback.message.answer(
-            f"✅ <b>Task marked as done manually!</b>\n"
-            f"File: <code>{html.escape(task['file_path'])}</code>\n\n"
-            f"Click below to verify syntax & logic with AI:",
-            parse_mode="HTML",
-            reply_markup=get_post_task_keyboard(task_id)
-        )
+        await run_task_verification(callback, task)
 
-    # 3. AI-проверка
     elif action == "verify":
-        await callback.answer("🔍 Inspecting code changes...")
-        status_msg = await callback.message.reply(
-            f"🕵️‍♂️ Inspecting <code>{html.escape(task['file_path'])}</code> to verify your fix...",
-            parse_mode="HTML"
-        )
+        await callback.answer()
+        await run_task_verification(callback, task)
 
-        try:
-            current_code = read_single_file(config.CONTAINER_PROJECT_PATH, task["file_path"])
-            verification = await asyncio.to_thread(agent.verify_task_fix, task, current_code)
-        except Exception as e:
-            await status_msg.edit_text(f"❌ Could not read file for verification: {html.escape(str(e))}")
-            return
-
-        feedback_escaped = html.escape(verification.feedback)
-        if verification.is_completed:
-            await db.update_task_status(task_id, "completed")
-            await callback.message.edit_reply_markup(reply_markup=None)
-
-            kb_next = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
-                [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
-            ])
-            await status_msg.edit_text(
-                f"✅ <b>Verification Passed!</b>\n\n{feedback_escaped}\n\n"
-                f"Task verified! Click below to move forward 🚀",
-                parse_mode="HTML",
-                reply_markup=kb_next
-            )
-        else:
-            await db.reset_ignored_count()
-            kb_reverify = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🔍 Verify Fix Again", callback_data=f"task:verify:{task_id}")],
-                [InlineKeyboardButton(text="🎯 Next Task", callback_data="quick:next")],
-                [InlineKeyboardButton(text="🛑 Stop Session & Get PDF Report", callback_data="task:stop_session")]
-            ])
-            await status_msg.edit_text(
-                f"⚠️ <b>Not quite ready yet!</b>\n\n{feedback_escaped}\n\n"
-                f"<i>Fix the file and click below to re-verify:</i>",
-                parse_mode="HTML",
-                reply_markup=kb_reverify
-            )
-
-    # 4. Авто-применение
     elif action == "apply":
         await callback.answer("Applying patches & checking syntax...")
         proj_dir = Path(config.CONTAINER_PROJECT_PATH)
 
         patches_to_apply = [{
             "file_path": task["file_path"],
-            "search_block": (task.get("search_block") or "").strip("\r\n"),
-            "ready_code_fix": (task.get("ready_code_fix") or "").strip("\r\n")
+            "search_block": (task.get("search_block") or "").strip(),
+            "ready_code_fix": task["ready_code_fix"].strip()
         }]
 
         dep_raw = task.get("dependent_patches") or "[]"
@@ -689,17 +685,14 @@ async def handle_task_actions(callback: CallbackQuery):
                 continue
 
             content = target_path.read_text(encoding="utf-8")
-            s_block = patch["search_block"]
-            r_fix = patch["ready_code_fix"]
-
-            new_content = apply_text_patch(content, s_block, r_fix)
-            if not new_content:
+            new_content = apply_text_patch(content, patch["search_block"], patch["ready_code_fix"])
+            if new_content is None:
                 continue
+
             target_path.write_text(new_content, encoding="utf-8")
             applied_files.append(target_path)
 
             syntax_error = check_file_syntax(target_path)
-
             if syntax_error:
                 target_path.write_text(content, encoding="utf-8")
                 await callback.message.answer(
@@ -718,14 +711,13 @@ async def handle_task_actions(callback: CallbackQuery):
             except Exception as e:
                 logging.debug(f"Git auto-commit failed: {e}")
 
-            await db.update_task_status(task_id, "completed")
             await callback.message.edit_reply_markup(reply_markup=None)
-
             await callback.message.answer(
-                f"✅ <b>Fix applied to {len(applied_files)} file(s) and committed!</b>",
-                parse_mode="HTML",
-                reply_markup=get_post_task_keyboard(task_id)
+                f"⚙️ <b>Fix applied to {len(applied_files)} file(s) and committed!</b> Running AI verification...",
+                parse_mode="HTML"
             )
+            # Автоматически запускаем ИИ-проверку внесённой правки
+            await run_task_verification(callback, task)
         else:
             await callback.message.answer(
                 "⚠️ <b>Auto-Apply Failed:</b> Could not find the exact code block to replace.",
