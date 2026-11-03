@@ -9,11 +9,13 @@ This project provides an AI-powered mentor agent that scans your codebase, ident
 - Task tracking (pending, completed, skipped)
 
 ## Setup
-1. Clone the repository.
-2. Create a `.env` file based on `.env.example`.
-3. Run `docker-compose up --build`.
+1. Clone the repository: `git clone <repo-url> && cd ai-project-mentor`
+2. Create a `.env` file with `GEMINI_API_KEY`, `TELEGRAM_BOT_TOKEN`, and optional `TARGET_PROJECT_PATH`.
+3. Verify `.env` is listed in your `.gitignore` before committing.
+4. Run `docker-compose up --build`.
 
 ## Usage
 - Send `/start` to the Telegram bot to register.
-- Use `/scan` to analyze your project.
-- Use `/next` to get your next task.
+- Use `/scan` or `/focus` to analyze your project and find improvements.
+- Use `/next` to receive and apply micro-tasks.
+- Tap **Commit & Push Changes** to record fixes to your Git history.
