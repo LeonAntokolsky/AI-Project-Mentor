@@ -5,6 +5,7 @@ import os
 import random
 import logging
 import config
+import json
 import subprocess
 import py_compile
 from typing import Dict
@@ -155,9 +156,14 @@ async def setup_bot_commands(bot_instance: Bot):
 def get_task_keyboard(task_id: int) -> InlineKeyboardMarkup:
     """Builds interactive buttons for a specific task."""
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="🛠 Apply Fix Auto", callback_data=f"task:apply:{task_id}")],
-        [InlineKeyboardButton(text="✅ Done Manually", callback_data=f"task:done:{task_id}")],
-        [InlineKeyboardButton(text="🔄 Reject & Alternative", callback_data=f"task:reject:{task_id}")]
+        [
+            InlineKeyboardButton(text="🛠 Apply Fix Auto", callback_data=f"task:apply:{task_id}"),
+            InlineKeyboardButton(text="🔍 Verify Fix", callback_data=f"task:verify:{task_id}")
+        ],
+        [
+            InlineKeyboardButton(text="✅ Done Manually", callback_data=f"task:done:{task_id}"),
+            InlineKeyboardButton(text="🔄 Reject & Alt", callback_data=f"task:reject:{task_id}")
+        ]
     ])
 
 def get_quick_actions_keyboard() -> InlineKeyboardMarkup:
@@ -285,11 +291,18 @@ async def send_task_to_user(chat_id: int):
         file_bytes = task["ready_code_fix"].encode("utf-8")
         document = BufferedInputFile(file_bytes, filename=filename)
 
-        caption = f"{header}📎 <i>The code snippet is large, so I attached the complete untruncated file below!</i>"
+        # Compact caption guaranteed to fit under Telegram's 1024-char limit safely
+        caption = (
+            f"🎯 <b>Micro-Task ({task['estimated_minutes']} mins)</b>\n"
+            f"📄 <b>File:</b> <code>{html.escape(task['file_path'])}</code>\n\n"
+            f"<b>{html.escape(task['title'])}</b>\n\n"
+            f"📎 <i>The code fix is large, so it is attached as a file above!</i>"
+        )
+
         await bot.send_document(
             chat_id,
             document=document,
-            caption=caption[:1024],
+            caption=caption,
             parse_mode="HTML",
             reply_markup=get_task_keyboard(task["id"])
         )
@@ -464,75 +477,147 @@ async def handle_quick_actions(callback: CallbackQuery):
         await run_codebase_scan(chat_id)
     elif action == "settings":
         await send_settings_menu(callback)
-@dp.callback_query(F.data.startswith(("verify:", "done:")))
-async def handle_verify_callback(callback: CallbackQuery):
-    task_id = int(callback.data.split(":")[1])
+
+
+@dp.callback_query(F.data.startswith("task:"))
+async def handle_task_actions(callback: CallbackQuery):
+    parts = callback.data.split(":")
+    action = parts[1]
+    task_id = int(parts[2])
+    chat_id = callback.message.chat.id
+    await db.set_chat_id(chat_id)
+
     task = await db.get_task_by_id(task_id)
-    if not task:
-        await callback.answer("Task not found!", show_alert=True)
+    if not task or task['status'] != 'pending':
+        await callback.answer("Task already processed or missing.", show_alert=True)
         return
 
-    await callback.answer("🔍 Checking your code changes...")
-    status_msg = await callback.message.reply(
-        f"🕵️‍♂️ Inspecting <code>{html.escape(task['file_path'])}</code> to verify your fix...",
-        parse_mode="HTML"
-    )
-
-    try:
-        current_code = read_single_file(config.CONTAINER_PROJECT_PATH, task["file_path"])
-        verification = await asyncio.to_thread(agent.verify_task_fix, task, current_code)
-    except Exception as e:
-        await status_msg.edit_text(f"❌ Could not read file for verification: {html.escape(str(e))}")
-        return
-
-    feedback_escaped = html.escape(verification.feedback)
-    if verification.is_completed:
+    if action == "done":
         await db.update_task_status(task_id, "completed")
         await callback.message.edit_reply_markup(reply_markup=None)
-        await status_msg.edit_text(
-            f"✅ <b>Verification Passed!</b>\n\n{feedback_escaped}\n\n"
-            f"Task marked as completed! Moving to the next task... 🚀",
-            parse_mode="HTML"
-        )
-        await send_task_to_user(callback.message.chat.id)
-    else:
-        await db.reset_ignored_count()
-        await status_msg.edit_text(
-            f"⚠️ <b>Not quite ready yet!</b>\n\n{feedback_escaped}\n\n"
-            f"<i>Update the file and click <b>✅ Verify & Done</b> again when ready.</i>",
+        await callback.answer("Marked as done manually!")
+        await send_task_to_user(chat_id)
+
+    elif action == "apply":
+        await callback.answer("Applying patches & checking syntax...")
+        proj_dir = Path(config.CONTAINER_PROJECT_PATH)
+
+        # 1. Prepare main file patch + dependent patches
+        patches_to_apply = [{
+            "file_path": task["file_path"],
+            "search_block": (task.get("search_block") or "").strip(),
+            "ready_code_fix": task["ready_code_fix"].strip()
+        }]
+
+        # Add dependent patches from JSON if present
+        dep_raw = task.get("dependent_patches") or "[]"
+        try:
+            dep_patches = json.loads(dep_raw) if isinstance(dep_raw, str) else dep_raw
+            patches_to_apply.extend(dep_patches)
+        except Exception:
+            pass
+
+        # 2. Apply all patches atomically
+        applied_files = []
+        for patch in patches_to_apply:
+            target_path = proj_dir / patch["file_path"]
+            if not target_path.exists():
+                continue
+
+            content = target_path.read_text(encoding="utf-8")
+            s_block = patch["search_block"]
+            r_fix = patch["ready_code_fix"]
+
+            if s_block and s_block in content:
+                new_content = content.replace(s_block, r_fix, 1)
+                target_path.write_text(new_content, encoding="utf-8")
+                applied_files.append(target_path)
+
+                if target_path.suffix == ".py":
+                    try:
+                        py_compile.compile(target_path, doraise=True)
+                    except py_compile.PyCompileError as e:
+                        # Rollback on syntax failure
+                        target_path.write_text(content, encoding="utf-8")
+                        await callback.message.answer(
+                            f"❌ <b>Syntax Error in {html.escape(patch['file_path'])}! Rollback applied.</b>\n"
+                            f"<pre><code>{html.escape(str(e))}</code></pre>",
+                            parse_mode="HTML"
+                        )
+                        return
+
+        # 3. Git commit if changes succeeded
+        if applied_files:
+            try:
+                for f in applied_files:
+                    subprocess.run(["git", "add", str(f)], cwd=proj_dir, check=False)
+                commit_msg = f"refactor: {task['title'].lower()}"
+                subprocess.run(["git", "commit", "-m", commit_msg], cwd=proj_dir, check=False)
+            except Exception as e:
+                logging.debug(f"Git auto-commit failed: {e}")
+
+            await db.update_task_status(task_id, "completed")
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.answer(
+                f"✅ <b>Fix applied to {len(applied_files)} file(s) and committed!</b>",
+                parse_mode="HTML"
+            )
+            await send_task_to_user(chat_id)
+        else:
+            await callback.message.answer(
+                "⚠️ <b>Auto-Apply Failed:</b> Could not find the exact code block to replace.",
+                parse_mode="HTML"
+            )
+
+    elif action == "reject":
+        await callback.message.edit_reply_markup(reply_markup=None)
+        status_msg = await callback.message.answer("🧠 Generating an alternative strategy...")
+
+        try:
+            code_dump = collect_project_context(config.CONTAINER_PROJECT_PATH)
+            alt_task = await asyncio.to_thread(agent.generate_alternative_task, task, code_dump)
+
+            # Replace rejected task with newly generated alternative
+            await db.replace_with_alternative_task(task_id, alt_task)
+            await status_msg.edit_text("✨ Alternative solution generated!")
+            await send_task_to_user(chat_id)
+        except Exception as e:
+            logging.error(f"Failed to generate alternative task: {e}")
+            await db.update_task_status(task_id, "skipped")
+            await status_msg.edit_text("🔄 Task skipped. Moving to next backlog item...")
+            await send_task_to_user(chat_id)
+
+    elif action == "verify":
+        await callback.answer("🔍 Checking your code changes...")
+        status_msg = await callback.message.reply(
+            f"🕵️‍♂️ Inspecting <code>{html.escape(task['file_path'])}</code> to verify your fix...",
             parse_mode="HTML"
         )
 
-@dp.callback_query(F.data.startswith("skip:"))
-async def handle_skip_callback(callback: CallbackQuery):
-    task_id = int(callback.data.split(":")[1])
-    await db.update_task_status(task_id, "skipped")
-    await callback.message.edit_reply_markup(reply_markup=None)
-    await callback.answer("⏭ Skipped")
-    await callback.message.reply("⏭ Task skipped. Fetching the next one...")
-    await send_task_to_user(callback.message.chat.id)
+        try:
+            current_code = read_single_file(config.CONTAINER_PROJECT_PATH, task["file_path"])
+            verification = await asyncio.to_thread(agent.verify_task_fix, task, current_code)
+        except Exception as e:
+            await status_msg.edit_text(f"❌ Could not read file for verification: {html.escape(str(e))}")
+            return
 
-@dp.callback_query(F.data.startswith("snooze:"))
-async def handle_snooze_callback(callback: CallbackQuery):
-    # Keep the buttons intact so the user can still verify or skip whenever they return!
-    await db.reset_ignored_count()
-    interval = await db.get_ping_interval(config.PING_INTERVAL_HOURS)
-    next_run = datetime.now() + timedelta(hours=24)
-    scheduler.add_job(
-        send_scheduled_ping,
-        "interval",
-        hours=interval,
-        next_run_time=next_run,
-        id=MAIN_JOB_ID,
-        replace_existing=True
-    )
-    await callback.answer("⏳ Snoozed for 24 hours!")
-    await callback.message.reply(
-        "⏳ <b>Snoozed for 24 hours!</b>\n"
-        "You can still click <b>✅ Verify & Done</b> above whenever you finish, or use the quick actions below:",
-        parse_mode="HTML",
-        reply_markup=get_quick_actions_keyboard()
-    )
+        feedback_escaped = html.escape(verification.feedback)
+        if verification.is_completed:
+            await db.update_task_status(task_id, "completed")
+            await callback.message.edit_reply_markup(reply_markup=None)
+            await status_msg.edit_text(
+                f"✅ <b>Verification Passed!</b>\n\n{feedback_escaped}\n\n"
+                f"Task marked as completed! Moving to next task... 🚀",
+                parse_mode="HTML"
+            )
+            await send_task_to_user(chat_id)
+        else:
+            await db.reset_ignored_count()
+            await status_msg.edit_text(
+                f"⚠️ <b>Not quite ready yet!</b>\n\n{feedback_escaped}\n\n"
+                f"<i>Update the file and click <b>🔍 Verify Fix</b> again when ready.</i>",
+                parse_mode="HTML"
+            )
 
 @dp.callback_query(F.data == "git:commit_push")
 async def handle_git_commit_push(callback: CallbackQuery):
