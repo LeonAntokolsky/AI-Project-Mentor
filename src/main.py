@@ -723,22 +723,24 @@ async def handle_task_actions(callback: CallbackQuery):
                 return
 
         if applied_files:
-            try:
-                subprocess.run(["git", "config", "--global", "--add", "safe.directory", str(proj_dir)], check=False)
-                has_user = subprocess.run(["git", "config", "user.name"], cwd=proj_dir, capture_output=True, text=True)
-                if not has_user.stdout.strip():
-                    subprocess.run(["git", "config", "user.name", "AI Project Mentor"], cwd=proj_dir, check=False)
-                    subprocess.run(["git", "config", "user.email", "mentor@local"], cwd=proj_dir, check=False)
-                for f in applied_files:
-                    subprocess.run(["git", "add", str(f)], cwd=proj_dir, check=False)
-                    rel_name = str(f.relative_to(proj_dir)) if f.is_relative_to(proj_dir) else f.name
-                    scope = f.stem
-                    is_primary = (rel_name == task.get("file_path", "").lstrip("/\\"))
-                    action_detail = "apply" if is_primary else "update dependent"
-                    f_commit_msg = f"refactor({scope}): {action_detail} {task['title'].lower()}"
-                    subprocess.run(["git", "commit", "-m", f_commit_msg], cwd=proj_dir, check=False)
-            except Exception as e:
-                logging.debug(f"Git auto-commit failed: {e}")
+            def _commit_applied():
+                try:
+                    subprocess.run(["git", "config", "--global", "--add", "safe.directory", str(proj_dir)], check=False)
+                    has_user = subprocess.run(["git", "config", "user.name"], cwd=proj_dir, capture_output=True, text=True)
+                    if not has_user.stdout.strip():
+                        subprocess.run(["git", "config", "user.name", "AI Project Mentor"], cwd=proj_dir, check=False)
+                        subprocess.run(["git", "config", "user.email", "mentor@local"], cwd=proj_dir, check=False)
+                    for path_obj, _ in applied_files:
+                        subprocess.run(["git", "add", str(path_obj)], cwd=proj_dir, check=False)
+                        rel_name = str(path_obj.relative_to(proj_dir)) if path_obj.is_relative_to(proj_dir) else path_obj.name
+                        scope = path_obj.stem
+                        is_primary = (rel_name == task.get("file_path", "").lstrip("/\\"))
+                        action_detail = "apply" if is_primary else "update dependent"
+                        f_commit_msg = f"refactor({scope}): {action_detail} {task['title'].lower()}"
+                        subprocess.run(["git", "commit", "-m", f_commit_msg], cwd=proj_dir, check=False)
+                except Exception as err:
+                    logging.debug(f"Git auto-commit failed: {err}")
+            await asyncio.to_thread(_commit_applied)
 
             await callback.message.answer(
                 f"⚙️ <b>Fix applied to {len(applied_files)} file(s) and committed!</b> Running AI verification...",
@@ -822,7 +824,7 @@ async def handle_git_commit_push(callback: CallbackQuery):
         status_proc = subprocess.run(["git", "status", "--porcelain"], cwd=proj_dir, capture_output=True, text=True)
         changed_entries = [line.strip().split(maxsplit=1)[-1] for line in status_proc.stdout.splitlines() if line.strip()]
 
-        commit_summaries = []
+        diff_items = []
         for file_rel in changed_entries:
             clean_file = file_rel.strip('"\'')
             diff_proc = subprocess.run(["git", "diff", "--", clean_file], cwd=proj_dir, capture_output=True, text=True)
@@ -830,8 +832,13 @@ async def handle_git_commit_push(callback: CallbackQuery):
             if not file_diff:
                 f_obj = Path(proj_dir) / clean_file
                 file_diff = f_obj.read_text(encoding="utf-8", errors="ignore")[:3000] if f_obj.is_file() else "new file"
+            diff_items.append((clean_file, file_diff))
 
-            file_msg = await asyncio.to_thread(agent.generate_file_commit_message, clean_file, file_diff)
+        tasks = [asyncio.to_thread(agent.generate_file_commit_message, f, d) for f, d in diff_items]
+        messages = await asyncio.gather(*tasks) if tasks else []
+
+        commit_summaries = []
+        for (clean_file, _), file_msg in zip(diff_items, messages):
             subprocess.run(["git", "add", clean_file], cwd=proj_dir, check=False)
             commit_res = subprocess.run(["git", "commit", "-m", file_msg], cwd=proj_dir, capture_output=True, text=True)
             if commit_res.returncode == 0:
