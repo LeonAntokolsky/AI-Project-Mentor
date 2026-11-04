@@ -207,10 +207,15 @@ class MentorAgent:
             "summarizing ONLY the actual changes shown in this git diff. Return plain text without quotes or markdown:\n\n"
             f"{diff_text[:15000]}"
         )
-        response = self.client.models.generate_content(
-            model=self.model_name,
-            contents=prompt,
-            config=types.GenerateContentConfig(temperature=0.2),
-        )
-        lines = [line.strip() for line in (response.text or "").splitlines() if line.strip()]
-        return lines[0] if lines else "chore: update codebase"
+        try:
+            response = self.client.models.generate_content(
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(temperature=0.2),
+            )
+            lines = [line.strip() for line in (response.text or "").splitlines() if line.strip()]
+            if lines:
+                return lines[0]
+        except Exception:
+            pass
+        return "chore: update codebase"
