@@ -84,11 +84,16 @@ def collect_project_context(base_dir: str, max_size: int = MAX_FILE_SIZE_BYTES) 
     for root, dirs, files in os.walk(root_path):
         dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith(".")]
         for file_name in files:
-            file_path = Path(root) / file_name
-            if not is_scannable_file(file_path):
+            if file_name in IGNORE_FILES or file_name.startswith(".env"):
                 continue
+            lower_name = file_name.lower()
+            dot_idx = lower_name.rfind(".")
+            if lower_name != "dockerfile" and (dot_idx == -1 or lower_name[dot_idx:] not in ALLOWED_EXTENSIONS):
+                continue
+            file_path = Path(root) / file_name
             try:
-                if file_path.stat().st_size > max_size:
+                st = file_path.stat()
+                if st.st_size > max_size:
                     continue
                 rel_path_str = str(file_path.relative_to(root_path))
                 content = file_path.read_text(encoding="utf-8", errors="replace")
