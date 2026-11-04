@@ -93,7 +93,8 @@ class Database:
         return await self._get_state_field("chat_id")
 
     async def set_user_verified(self, chat_id: Optional[int] = None):
-        """Marks user as verified for filesystem access."""
+        """Marks user as verified for filesystem access and updates cache."""
+        self._is_verified = True
         if chat_id is not None:
             await self.set_chat_id(chat_id)
         await self._update_state_field("is_verified", 1)
@@ -230,11 +231,11 @@ class Database:
         return await self._fetch_task("SELECT * FROM tasks WHERE id = ?", (task_id,))
 
     async def update_task_status(self, task_id: int, status: str):
-        """Updates task status and resets ignored_count when user interacts."""
+        """Updates task status and resets ignored_count atomically in one transaction."""
         async with self._get_db() as db:
             await db.execute("UPDATE tasks SET status = ? WHERE id = ?", (status, task_id))
+            await db.execute("UPDATE project_state SET ignored_count = 0 WHERE id = 1")
             await db.commit()
-        await self.reset_ignored_count()
 
     async def reset_ignored_count(self):
         """Resets ignored counter when user manually interacts with the bot."""
@@ -274,5 +275,10 @@ class Database:
             }
 
     async def is_user_verified(self) -> bool:
-        """Checks if the active user has verified filesystem ownership."""
-        return bool(await self._get_state_field("is_verified", 0))
+        """Checks if the active user has verified filesystem ownership with memory caching."""
+        if getattr(self, "_is_verified", False):
+            return True
+        val = bool(await self._get_state_field("is_verified", 0))
+        if val:
+            self._is_verified = True
+        return val
