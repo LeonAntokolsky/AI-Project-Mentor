@@ -51,8 +51,8 @@ ALLOWED_HEART_EMOJIS = {"❤️", "💖", "🥰", "💕", "❤"}
 
 MAIN_JOB_ID = "scheduled_ping_job"
 MAX_TG_LENGTH = 4000
-ALLOWED_USER_ID = int(os.getenv("ALLOWED_USER_ID", "0"))
-AUTH_TOKEN_FILE = Path("/app/data/.auth_token")
+ALLOWED_USER_ID = config.ALLOWED_USER_ID
+AUTH_TOKEN_FILE = config.AUTH_TOKEN_PATH
 FOCUS_PRESETS = {
     "security": "Security hardening, input validation, auth protection, and secret safety",
     "perf": "Performance optimization, async efficiency, I/O reduction, and faster DB queries",
