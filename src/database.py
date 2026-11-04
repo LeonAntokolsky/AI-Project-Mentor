@@ -282,3 +282,10 @@ class Database:
         if val:
             self._is_verified = True
         return val
+
+    async def close(self):
+        """Gracefully closes SQLite database connection and releases locks."""
+        async with self._lock:
+            if self._conn is not None:
+                await self._conn.close()
+                self._conn = None
