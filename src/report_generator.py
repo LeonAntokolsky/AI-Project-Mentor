@@ -117,6 +117,9 @@ def generate_session_pdf_report(
     story.append(Spacer(1, 10))
     story.append(HRFlowable(width="100%", thickness=1, color=colors.HexColor('#E2E8F0'), spaceAfter=12))
 
+    def _format_code_snippet(code: str | None) -> str:
+        return html.escape((code or 'N/A').strip()[:1500]).replace('\n', '<br/>')
+
     if not completed_tasks:
         story.append(Paragraph("No tasks were completed in this session.", body_style))
     else:
@@ -124,10 +127,6 @@ def generate_session_pdf_report(
             title_esc = html.escape(t.get('title', 'Micro-Task'))
             file_path_esc = html.escape(t.get('file_path', 'N/A'))
             profit_esc = html.escape(t.get('expected_profit') or t.get('explanation') or 'Improve code quality')
-
-            def _format_code_snippet(code: str | None) -> str:
-                return html.escape((code or 'N/A').strip()[:1500]).replace('\n', '<br/>')
-
             search_code_esc = _format_code_snippet(t.get('search_block'))
             fix_code_esc = _format_code_snippet(t.get('ready_code_fix'))
 
