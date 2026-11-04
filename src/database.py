@@ -1,3 +1,4 @@
+import asyncio
 import json
 import aiosqlite
 from contextlib import asynccontextmanager
@@ -8,17 +9,23 @@ from datetime import datetime
 class Database:
     def __init__(self, db_path: str):
         self.db_path = db_path
+        self._conn: Optional[aiosqlite.Connection] = None
+        self._lock = asyncio.Lock()
+        self._is_verified: bool = False
 
     @asynccontextmanager
     async def _get_db(self):
-        """Centralized async context manager providing a configured SQLite connection."""
-        async with aiosqlite.connect(self.db_path, timeout=15.0) as db:
-            await db.execute("PRAGMA journal_mode=WAL;")
-            await db.execute("PRAGMA synchronous=NORMAL;")
-            await db.execute("PRAGMA cache_size=-64000;")
-            await db.execute("PRAGMA busy_timeout=5000;")
-            db.row_factory = aiosqlite.Row
-            yield db
+        """Centralized async context manager providing a reusable configured SQLite connection."""
+        async with self._lock:
+            if self._conn is None:
+                conn = await aiosqlite.connect(self.db_path, timeout=15.0)
+                await conn.execute("PRAGMA journal_mode=WAL;")
+                await conn.execute("PRAGMA synchronous=NORMAL;")
+                await conn.execute("PRAGMA cache_size=-64000;")
+                await conn.execute("PRAGMA busy_timeout=5000;")
+                conn.row_factory = aiosqlite.Row
+                self._conn = conn
+            yield self._conn
 
     async def init_db(self, default_interval: int = 24):
         """Initializes SQLite tables and runs safe schema migrations."""
@@ -104,6 +111,23 @@ class Database:
         """Sets or updates the ping interval in hours (clamped between 1 and 168 hours)."""
         clamped_hours = max(1, min(168, interval_hours))
         await self._update_state_field("ping_interval_hours", clamped_hours)
+
+    async def _update_state_field(self, column: str, value: Any):
+        """Helper to upsert a single field in project_state for row id=1."""
+        allowed_columns = {
+            "chat_id", "ping_interval_hours", "is_verified", "summary",
+            "current_focus", "current_session_id", "ignored_count"
+        }
+        if column not in allowed_columns:
+            raise ValueError(f"Invalid state column: {column}")
+
+        async with self._get_db() as db:
+            await db.execute(f"""
+                INSERT INTO project_state (id, {column})
+                VALUES (1, ?)
+                ON CONFLICT(id) DO UPDATE SET {column} = excluded.{column}
+            """, (value,))
+            await db.commit()
 
     async def get_completed_tasks(self) -> list[dict]:
         """Fetches completed tasks belonging strictly to the active session."""
